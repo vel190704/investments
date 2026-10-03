@@ -15,7 +15,13 @@ const GROUPS = [
     { href: "/holdings/funds", label: "Mutual funds" },
     { href: "/transactions", label: "Transactions" },
   ] },
-  { title: "Analysis", links: [{ href: "/allocation", label: "Allocation" }] },
+  { title: "Analysis", links: [
+    { href: "/health", label: "Portfolio health" },
+    { href: "/allocation", label: "Allocation" },
+    { href: "/sectors", label: "Sectors" },
+    { href: "/overlap", label: "Fund look-through" },
+    { href: "/fundamentals", label: "Fundamentals" },
+  ] },
   { title: "Planning", links: [
     { href: "/simulator", label: "Next contribution" },
     { href: "/planner", label: "Monthly planner" },
@@ -25,6 +31,7 @@ const GROUPS = [
   { title: "Data", links: [
     { href: "/import", label: "Import" },
     { href: "/mappings", label: "Mappings" },
+    { href: "/classification", label: "Classification" },
     { href: "/settings", label: "Settings" },
   ] },
 ];

@@ -106,6 +106,11 @@ export type SimScenario = {
   mf_split: (SimPair & { instrument_id: number; category: string })[];
   top_companies: (SimPair & { instrument_id: number })[];
   sentences: string[];
+  lookthrough: null | {
+    companies: { isin: string; name: string; before: string; after: string }[];
+    sectors: { name: string; before: string; after: string }[];
+    funds_without_disclosure: string[];
+  };
 };
 export type SimResult = {
   amount_paise: number; assumptions: string[];
@@ -185,6 +190,9 @@ export type Settings = {
     concentration: SettingsSection<Record<string, { low: string; high: string }>>;
     projection: SettingsSection<ProjectionCfg>;
     emergency_fund: SettingsSection<EmergencyCfg | null>;
+    sector_ranges: SettingsSection<Record<string, { min: string; max: string }> | null>;
+    themes: SettingsSection<Record<string, string[]> | null>;
+    health: SettingsSection<Record<string, Record<string, string>>>;
   };
 };
 export type PlanLineOut = {
@@ -225,6 +233,71 @@ export type EmergencyFund = {
   status: null | { target_paise: number; balance_paise: number; remaining_paise: number; percent_complete: string | null;
                    months_covered: string | null; target_months: number; monthly_expenses_paise: number; complete: boolean };
 };
+
+// ---- Phase 3 types ----
+export type Level = "LOW" | "MODERATE" | "HIGH";
+export type SectorRow = {
+  sector: string; value_paise: number; pct: string; count: number; origins: string[];
+  contributors: { name: string; value_paise: number; pct: string }[];
+};
+export type SectorFlag = { key: string; title: string; level: Level; value: string; reason: string; calculation: string; thresholds: string };
+export type SectorsPage = {
+  total_value_paise: number; sectors: SectorRow[]; basis: string;
+  metrics: { equity_value_paise: number; sectors: number; largest: { sector: string; share: string } | null; hhi: string | null; flags: SectorFlag[] };
+  ranges: { sector: string; current: string; min: string; max: string; status: string; reason: string }[];
+  geography: { india_paise: number; india_pct: string; international_paise: number; international_pct: string;
+               regions: { region: string; value_paise: number; pct: string }[] };
+  themes: { tag: string; value_paise: number; pct: string; members: { isin: string; name: string; total_paise: number }[]; missing: string[] }[];
+  direct: { instrument_id: number; name: string; asset_type: string; sector: string; origin: string | null; manual: boolean;
+            source: string | null; as_of: string | null; value_paise: number }[];
+  funds_looked_through: { name: string; label: string }[]; funds_not_looked_through: string[];
+};
+export type ClassificationRow = {
+  instrument_id: number; name: string; symbol: string | null; asset_type: string; asset_class: string;
+  asset_class_override: string | null; etf_underlying: string | null; etf_underlying_key: string | null; region: string | null;
+  sector: string; sector_origin: string | null; sector_manual: boolean; sector_source: string | null; sector_as_of: string | null;
+};
+export type Classification = { asset_classes: string[]; instruments: ClassificationRow[] };
+export type FactCell = {
+  metric: string; label: string; unit: "inr" | "ratio" | "fraction" | "text"; manual_allowed: boolean;
+  value: string | null; text: string | null; display_na: string | null; origin: string | null; manual?: boolean;
+  source?: string | null; as_of?: string | null; fetched_at?: string | null; note?: string | null;
+  portfolio_sector_median?: string | null;
+};
+export type Fundamentals = {
+  stocks: { instrument_id: number; symbol: string; name: string; sector: string; price: string | null;
+            price_source: string | null; price_date: string | null; metrics: FactCell[] }[];
+  funds: { instrument_id: number; name: string; scheme_code: string | null; is_index_fund: boolean; metrics: FactCell[] }[];
+  metric_defs: { key: string; label: string; unit: string; applies_to: string; manual: boolean; auto: boolean; note: string; bounds: (string | null)[] }[];
+  notes: string[];
+};
+export type DisclosureItem = {
+  id: number; instrument_id: number; fund: string; kind: string; as_of: string; index_name: string | null; parser: string;
+  source_file: string; uploaded_at: string; rows: number; equity_weight: string; label: string; in_use: boolean; stale: boolean;
+};
+export type CompanyExposure = {
+  isin: string; name: string; direct_paise: number; indirect_paise: number; total_paise: number;
+  direct_pct: string | null; indirect_pct: string | null; total_pct: string | null;
+  via: { instrument_id: number; fund: string; paise: number; pct: string | null }[];
+  level: Level | null; reason: string | null; calculation: string | null;
+};
+export type Lookthrough = {
+  companies: CompanyExposure[]; unmatched_direct: { instrument_id: number; name: string; reason: string }[];
+  not_looked_through: { instrument_id: number; name: string; value_paise: number }[];
+  coverage: { instrument_id: number; name: string; label: string; as_of: string; equity_weight: string }[];
+  thresholds: { low: string; high: string; rule: string }; stale: { fund: string; as_of: string; warning: string }[];
+  total_value_paise: number; basis: string;
+};
+export type OverlapPair = {
+  fund_a: string; fund_b: string; overlap: string; common_count: number; labels: (string | null)[];
+  common: { isin: string; name: string; weight_a: string; weight_b: string; min: string }[];
+};
+export type Overlap = { pairs: OverlapPair[]; not_looked_through: string[]; basis: string };
+export type HealthDim = {
+  key: string; title: string; level: Level | null; value: string | null; reason: string; calculation: string | null;
+  thresholds: string | null; available: boolean; info_only: boolean;
+};
+export type Health = { valuation_date: string; dimensions: HealthDim[]; stale: { warning: string }[]; not_looked_through: string[]; note: string };
 
 // ---- fetch helpers ----
 export class ApiError extends Error {}

@@ -5,7 +5,7 @@ import { ErrorBox, Loading, Notice, PageHeader, Section } from "@/components/com
 import { Field, Select, numeric, rupeesToPaise } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { apiDelete, apiPut, errorText, useApi, type Settings } from "@/lib/api";
+import { apiDelete, apiPut, errorText, useApi, type Lookthrough, type SectorsPage, type Settings } from "@/lib/api";
 import { formatINR } from "@/lib/format";
 
 const CONC_LABELS: Record<string, { label: string; unit: "fraction" | "hhi" }> = {
@@ -32,7 +32,15 @@ export default function SettingsPage() {
             <ProjectionRates s={data} onSaved={reload} />
           </div>
           <Concentration s={data} onSaved={reload} />
+          <HealthThresholds s={data} onSaved={reload} />
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <SectorRanges s={data} onSaved={reload} />
+            <Themes s={data} onSaved={reload} />
+          </div>
           <Emergency s={data} onSaved={reload} />
+          <p className="text-xs text-muted-foreground">
+            Asset-class, sector and region overrides per instrument: <a className="underline" href="/classification">Classification</a>.
+          </p>
         </div>
       )}
     </>
@@ -220,6 +228,136 @@ function Emergency({ s, onSaved }: { s: Settings; onSaved: () => void }) {
         <Button disabled={!ok || busy} onClick={() => save({ monthly_expenses_paise: e, balance_paise: b, target_months: Number(months) })}>Save</Button>
         {s.sections.emergency_fund.is_set && <Button variant="ghost" disabled={busy} onClick={reset}>Clear</Button>}
         {ok && <span className="tnum text-xs text-muted-foreground">Target would be {formatINR((e as number) * Number(months))}</span>}
+        {feedback}
+      </div>
+    </Section>
+  );
+}
+
+const HEALTH_ROWS: { key: string; label: string; unit: "fraction" | "hhi" }[] = [
+  { key: "company_lookthrough", label: "Company total exposure, % of portfolio", unit: "fraction" },
+  { key: "sector_largest", label: "Largest sector, % of equity exposure", unit: "fraction" },
+  { key: "sector_hhi", label: "Sector HHI", unit: "hhi" },
+  { key: "overlap", label: "Largest pairwise fund overlap", unit: "fraction" },
+];
+
+function HealthThresholds({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+  const v = s.sections.health.value;
+  const [form, setForm] = useState(() => ({
+    ...Object.fromEntries(HEALTH_ROWS.map((r) => [r.key, {
+      low: r.unit === "hhi" ? v[r.key].low : toPct(v[r.key].low), high: r.unit === "hhi" ? v[r.key].high : toPct(v[r.key].high),
+    }])),
+    drift: { high_multiple: v.drift.high_multiple },
+    emergency: { moderate_below: toPct(v.emergency.moderate_below), high_below: toPct(v.emergency.high_below) },
+  }) as Record<string, Record<string, string>>);
+  const { save, reset, busy, feedback } = useSaver("health", onSaved);
+  const set = (k: string, f: string, val: string) => setForm({ ...form, [k]: { ...form[k], [f]: numeric(val) } });
+  function submit() {
+    save({
+      ...Object.fromEntries(HEALTH_ROWS.map((r) => [r.key, r.unit === "hhi" ? form[r.key]
+        : { low: fromPct(form[r.key].low), high: fromPct(form[r.key].high) }])),
+      drift: form.drift,
+      emergency: { moderate_below: fromPct(form.emergency.moderate_below), high_below: fromPct(form.emergency.high_below) },
+    });
+  }
+  return (
+    <Section title="Portfolio health thresholds" aside={s.sections.health.is_set ? "Custom" : "Defaults (as defined in code)"}>
+      <div className="flex flex-col gap-2">
+        {HEALTH_ROWS.map((r) => (
+          <div key={r.key} className="grid grid-cols-[1fr_6rem_6rem] items-end gap-3">
+            <span className="text-sm">{r.label}{r.unit === "fraction" ? " (%)" : ""}</span>
+            <Field label="Moderate from"><Input inputMode="decimal" value={form[r.key].low} onChange={(e) => set(r.key, "low", e.target.value)} /></Field>
+            <Field label="High from"><Input inputMode="decimal" value={form[r.key].high} onChange={(e) => set(r.key, "high", e.target.value)} /></Field>
+          </div>
+        ))}
+        <div className="grid grid-cols-[1fr_6rem_6rem] items-end gap-3">
+          <span className="text-sm">Drift: HIGH beyond this multiple of your tolerance band</span>
+          <Field label="× band"><Input inputMode="decimal" value={form.drift.high_multiple} onChange={(e) => set("drift", "high_multiple", e.target.value)} /></Field>
+          <span />
+        </div>
+        <div className="grid grid-cols-[1fr_6rem_6rem] items-end gap-3">
+          <span className="text-sm">Emergency-fund coverage (% of target)</span>
+          <Field label="Moderate below"><Input inputMode="decimal" value={form.emergency.moderate_below} onChange={(e) => set("emergency", "moderate_below", e.target.value)} /></Field>
+          <Field label="High below"><Input inputMode="decimal" value={form.emergency.high_below} onChange={(e) => set("emergency", "high_below", e.target.value)} /></Field>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button disabled={busy} onClick={submit}>Save thresholds</Button>
+        {s.sections.health.is_set && <Button variant="ghost" disabled={busy} onClick={reset}>Reset to defaults</Button>}
+        {feedback}
+      </div>
+    </Section>
+  );
+}
+
+function SectorRanges({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+  const sectors = useApi<SectorsPage>("/sectors");
+  const [rows, setRows] = useState<{ sector: string; min: string; max: string }[]>(
+    () => Object.entries(s.sections.sector_ranges.value ?? {}).map(([sector, r]) => ({ sector, ...r })));
+  const { save, reset, busy, feedback } = useSaver("sector_ranges", onSaved);
+  const names = (sectors.data?.sectors ?? []).map((x) => x.sector);
+  return (
+    <Section title="Desired sector ranges" aside="% of total portfolio · no defaults">
+      <div className="flex flex-col gap-2">
+        {rows.map((r, i) => (
+          <div key={i} className="grid grid-cols-[1fr_5rem_5rem_auto] items-end gap-2">
+            <Select value={r.sector} aria-label="Sector" onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, sector: e.target.value } : x))}>
+              <option value="">Choose sector…</option>
+              {[...new Set([...names, r.sector].filter(Boolean))].map((n) => <option key={n} value={n}>{n}</option>)}
+            </Select>
+            <Field label="Min %"><Input inputMode="decimal" value={r.min} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, min: numeric(e.target.value) } : x))} /></Field>
+            <Field label="Max %"><Input inputMode="decimal" value={r.max} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, max: numeric(e.target.value) } : x))} /></Field>
+            <Button variant="ghost" size="sm" onClick={() => setRows(rows.filter((_, j) => j !== i))}>Remove</Button>
+          </div>
+        ))}
+        <div><Button variant="outline" size="sm" onClick={() => setRows([...rows, { sector: "", min: "", max: "" }])}>Add range</Button></div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button disabled={busy || rows.some((r) => !r.sector || r.min === "" || r.max === "")}
+                onClick={() => save(Object.fromEntries(rows.map((r) => [r.sector, { min: r.min, max: r.max }])))}>Save ranges</Button>
+        {s.sections.sector_ranges.is_set && <Button variant="ghost" disabled={busy} onClick={reset}>Clear all</Button>}
+        {feedback}
+      </div>
+    </Section>
+  );
+}
+
+function Themes({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+  const look = useApi<Lookthrough>("/lookthrough");
+  const [rows, setRows] = useState<{ tag: string; isins: string[] }[]>(
+    () => Object.entries(s.sections.themes.value ?? {}).map(([tag, isins]) => ({ tag, isins })));
+  const { save, reset, busy, feedback } = useSaver("themes", onSaved);
+  const companies = look.data?.companies ?? [];
+  return (
+    <Section title="Themes" aside="Your own tags (e.g. Defence, Power, Banking) · no defaults">
+      <p className="mb-2 text-xs text-muted-foreground">Companies are tagged by ISIN, so exposure through funds counts too.</p>
+      <div className="flex flex-col gap-3">
+        {rows.map((r, i) => (
+          <div key={i} className="flex flex-col gap-1 rounded-md border border-border p-2">
+            <div className="flex gap-2">
+              <Input placeholder="Theme name" value={r.tag} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, tag: e.target.value } : x))} />
+              <Button variant="ghost" size="sm" onClick={() => setRows(rows.filter((_, j) => j !== i))}>Remove</Button>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {companies.slice(0, 60).map((c) => {
+                const on = r.isins.includes(c.isin);
+                return (
+                  <button key={c.isin} type="button" aria-pressed={on}
+                          onClick={() => setRows(rows.map((x, j) => j === i ? { ...x, isins: on ? x.isins.filter((y) => y !== c.isin) : [...x.isins, c.isin] } : x))}
+                          className={`rounded border px-1.5 py-0.5 text-xs ${on ? "border-foreground bg-muted" : "border-border text-muted-foreground"}`}>
+                    {c.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        <div><Button variant="outline" size="sm" onClick={() => setRows([...rows, { tag: "", isins: [] }])}>Add theme</Button></div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button disabled={busy || rows.some((r) => !r.tag.trim())}
+                onClick={() => save(Object.fromEntries(rows.map((r) => [r.tag.trim(), r.isins])))}>Save themes</Button>
+        {s.sections.themes.is_set && <Button variant="ghost" disabled={busy} onClick={reset}>Clear all</Button>}
         {feedback}
       </div>
     </Section>

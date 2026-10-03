@@ -205,6 +205,17 @@ function ScenarioCard({ s }: { s: SimScenario }) {
           name={(r) => (r as SimScenario["mf_split"][number]).category}
         />
         <PairTable title="Top company weights (% of portfolio)" rows={s.top_companies} />
+        {s.lookthrough && (
+          <>
+            <PairTable title="Total company exposure — direct + through funds (% of portfolio)" rows={s.lookthrough.companies} />
+            <PairTable title="Sector exposure incl. funds (% of portfolio)" rows={s.lookthrough.sectors} />
+            {s.lookthrough.funds_without_disclosure.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                Not looked through (no holdings uploaded): {s.lookthrough.funds_without_disclosure.map((f) => f.split(" - ")[0]).join(", ")}.
+              </p>
+            )}
+          </>
+        )}
       </div>
     </Section>
   );
