@@ -11,6 +11,10 @@ def main() -> int:
     with session_scope() as s:
         r = refresh_prices(s, trigger="manual")
     print(f"{r['ok_count']} updated, {r['error_count']} unavailable")
+    snap = r.get("snapshot")
+    if snap:
+        print(f"Snapshot stored for {snap['snapshot_date']}" + (f" (partial: no price for {len(snap['unpriced'])} holding(s))"
+                                                               if snap["partial"] else ""))
     for x in r["results"]:
         print(f"  {'ok ' if x['ok'] else 'N/A'} {x['name']}: "
               + (f"{x['price']} ({x['source']}, {x['price_date']})" if x["ok"] else x["error"]))

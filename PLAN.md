@@ -3,8 +3,7 @@
 Single-user, local-first portfolio analytics and planning tool for an Indian retail investor.
 It **never places orders**. Excel workbook = source of truth for transactions.
 
-Status: Phase 0 and Phase 1 done. Phase 2 (§10) in progress: migrations, in-app transactions,
-snapshots, XIRR, settings, drift, planner, projections, emergency fund, change log.
+Status: Phases 0, 1 and 2 done (§10 describes Phase 2). Phase 3 is next.
 
 ---
 
@@ -434,3 +433,6 @@ held" panel. The nav is grouped (Overview / Holdings / Analysis / Planning / Dat
 6. The "Direct stocks & ETFs" bucket has no instrument split in `monthly_plan` (see §10.8).
 7. Target classes are the five you listed; "Indian ETFs" are folded into Indian stocks for
    drift until a gold/debt classification exists (Phase 3 can classify ETFs by underlying).
+8. XIRR treats a dividend paid after a full sale as an inflow, attributed by the dated share at
+   the time of sale.
+9. After an import, an Excel row's `source_row` refers to the most recently imported file.

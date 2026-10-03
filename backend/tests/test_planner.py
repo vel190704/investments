@@ -83,5 +83,7 @@ def test_considerations_have_reasons_and_neutral_wording():
     text = " ".join(c["text"] for c in r["considerations"]).lower()
     for word in (" buy", " sell ", "should", "recommend"):
         assert word not in text
+    over = next(c for c in r["considerations"] if c["kind"] == "OVERWEIGHT")
+    assert over["text"].startswith("Allocation consideration: after this contribution, Mutual funds would be ")
     intl = next(c for c in r["considerations"] if c["kind"] == "INTERNATIONAL")
     assert "NYSE FANG+" in intl["text"]

@@ -5,6 +5,9 @@ retail investor (Groww stocks/ETFs + Zerodha Coin mutual funds). It reads your E
 values holdings with public market data, and shows allocation, concentration, and how a next
 contribution would change your mix.
 
+It also tracks daily history, allocation drift against your own targets, a monthly
+contribution planner, mathematical projections, and a separate emergency fund.
+
 It **never places orders**, has no login, and binds only to `127.0.0.1`.
 *Personal analytics tool, not investment advice.*
 
@@ -29,6 +32,19 @@ make dev            # backend http://127.0.0.1:8000  +  frontend http://127.0.0.
 Open http://127.0.0.1:3000. Ctrl-C stops both. Run them separately with `make backend` and
 `make frontend`.
 
+### Database migrations and backups
+
+The schema is managed with Alembic (`backend/migrations/`).
+- Migrations run automatically when the backend starts.
+- Before any pending migration is applied, the SQLite file is backed up to
+  `data/backups/investments-<timestamp>-pre-<revision>.db` (git-ignored).
+- A Phase 1 database (created before Alembic) is recognised and stamped as the baseline.
+
+```bash
+make backup         # ad-hoc consistent copy of the DB into data/backups/
+make migrate        # apply migrations now (backs up first)
+```
+
 ### First run
 
 1. Put your workbook at `data/personal_investment_tracker_clean.xlsx` (`data/` is git-ignored).
@@ -39,13 +55,48 @@ Open http://127.0.0.1:3000. Ctrl-C stops both. Run them separately with `make ba
 
    Nothing is applied until you confirm it. Mutual funds show "Data unavailable" until their
    scheme code is confirmed.
-4. Click **Refresh prices**, or run `make refresh`. A scheduled refresh also runs daily at
-   23:30 IST while the backend is up, and on start-up if prices are more than 18 h old.
+4. Click **Refresh prices**, or run `make refresh`.
+   - A scheduled refresh also runs daily at 23:30 IST while the backend is up, and on start-up
+     if prices are more than 18 h old.
+   - Every refresh stores that day's snapshot.
+5. Open **Settings** to enter your target allocation, review the projection rates (they ship as
+   placeholders), and fill in the emergency fund. Nothing there is assumed for you.
+
+## Pages
+
+| page | what it shows |
+|---|---|
+| Dashboard | value, invested, P&L, today's change, monthly plan, allocation, top holdings, flags, growth |
+| History | growth chart (value vs invested), snapshot list, "Take snapshot" |
+| Changes | change log (transactions, quantity/avg-cost, allocation) and compare snapshot A vs B or today |
+| Stocks & ETFs / Mutual funds | holdings tables with source, as-of date and XIRR |
+| Transactions | all rows with their source; add BUY/SIP/SELL/DIVIDEND; delete in-app rows; export to Excel |
+| Allocation | asset classes, drift vs targets (tolerance band), XIRR by class, concentration, "not held" info |
+| Next contribution | one-off amount: before → after per scenario |
+| Monthly planner | budget modes; distribution by monthly_plan and by your targets; allocation considerations |
+| Projection | Conservative / Base / Higher mathematical scenarios with formula and assumptions |
+| Emergency fund | target, % complete, remaining (never part of the portfolio) |
+| Import / Mappings / Settings | data management |
+
+## In-app transactions and export
+
+- **Add transaction** (Transactions page) records BUY, SIP, SELL or DIVIDEND with the same
+  validation as the Excel import.
+  - For an MF SIP, enter the units and NAV from Coin plus the amount; the amount is
+    authoritative.
+  - OPENING balances belong in the workbook.
+- In-app rows (`source = ui`) are **never** removed by a re-import. If the workbook later
+  contains an identical row, it is recognised and not duplicated.
+- Only in-app rows can be deleted in the app. Deleting one that a later SELL depends on is
+  refused.
+- **Export to Excel** writes every transaction (workbook + in-app) plus `holdings_fallback`
+  and `monthly_plan` in the exact input layout, so it is both a backup and a valid import.
 
 ## Tests
 
 ```bash
-make test           # backend pytest (calculations, importer, idempotency, XIRR, simulator, API)
+make test           # backend pytest (calculations, importer, idempotency, XIRR, simulator, drift,
+                    # planner, projection, emergency-fund isolation, snapshots, change log, migrations, API)
                     # + frontend INR-formatting tests
 make lint           # eslint + tsc
 ```
@@ -100,6 +151,8 @@ idempotent:
 - New rows are added, and edited notes are updated in place.
 - Rows you deleted from the workbook are removed from the database, but only when the file has
   zero row errors. Otherwise nothing is removed and the report says so.
+- Only workbook (`excel`) rows can be removed. In-app rows, snapshots, settings and the change
+  log are never touched by an import.
 
 Every import prints a report (loaded / skipped / errors with row numbers) and is kept in the
 import history.

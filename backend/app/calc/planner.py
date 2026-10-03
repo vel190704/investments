@@ -156,9 +156,14 @@ def _result(mode: str, label: str, book: _Book, holdings: list[SimHolding], budg
     if targets:
         for row in drift(after_f, total_after, targets, tolerance_pp):
             if row["status"] != "WITHIN BAND":
+                dev = Decimal(row["deviation_pp"])
+                side = "above" if dev > 0 else "below"
                 considerations.append({
                     "kind": row["status"], "title": f"{row['asset_class']} would be {row['status'].lower()}",
-                    "text": f"Allocation consideration: after this contribution, {row['reason'][0].lower()}{row['reason'][1:]}",
+                    "text": f"Allocation consideration: after this contribution, {row['asset_class']} would be "
+                            f"{format_pct(Decimal(row['current']))} of the portfolio vs a target of "
+                            f"{format_pct(Decimal(row['target']))} — {abs(dev):.1f} pp {side}, outside the "
+                            f"±{tolerance_pp} pp band.",
                     "calculation": row["calculation"]})
     stocks = [h for h in holdings if h.asset_type == "STOCK"]
     if stocks and total_after:

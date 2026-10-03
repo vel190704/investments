@@ -6,8 +6,11 @@ It never places orders. See PLAN.md for the design and README.md for usage.
 ## Commands
 - `make setup`  — create `backend/.venv`, install Python deps, `npm install` in frontend
 - `make dev`    — backend on 127.0.0.1:8000 + frontend on 127.0.0.1:3000
-- `make test`   — `pytest` in backend
+- `make test`   — backend pytest + frontend tests
 - `make import FILE=data/personal_investment_tracker_clean.xlsx` — CLI import
+- `make refresh` — fetch prices/NAVs and store today's snapshot
+- `make backup` / `make migrate` — SQLite backup to data/backups/ / apply Alembic migrations
+- `make lint` — eslint + tsc; `make test` also runs the frontend formatter tests
 - Backend only: `cd backend && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload`
 - Frontend only: `cd frontend && npm run dev`
 - CLI import: `cd backend && .venv/bin/python -m app.import_excel ../data/<file>.xlsx`
@@ -18,6 +21,19 @@ It never places orders. See PLAN.md for the design and README.md for usage.
 - Every financial calculation has a pytest test. Run tests before committing.
 - Small commits per milestone. Never commit `.env`, `data/`, `*.db`, `node_modules`, `.venv`.
 - No secrets in the repo; keys go in `.env` (template: `.env.example`).
+
+## Schema changes
+- Every schema change is an Alembic migration in `backend/migrations/versions/` (autogenerate
+  against a DB at the previous head, then review; CHECK constraints are hand-written).
+- `init_db()` runs migrations (never `create_all`) and backs up a SQLite file before applying any.
+- `tests/test_migrations.py` must stay green: no model/migration drift; Phase-1 DBs upgrade with
+  their data intact.
+
+## Data provenance
+- `transactions.source` is `excel` (owned by the workbook) or `ui` (entered in the app).
+- An import may delete only `excel` rows missing from the file, and only when the file has zero
+  errors. It never deletes `ui` rows, snapshots, settings or the change log.
+- Every transaction or position change writes change-log entries (`app/services/changelog.py`).
 
 ## Architecture rules
 - Single user: no auth, no user tables, no `user_id`. Backend binds to 127.0.0.1 only.
@@ -43,10 +59,21 @@ It never places orders. See PLAN.md for the design and README.md for usage.
   confirms them on the Mappings screen.
 - OPENING rows count for quantity/invested/value/P&L but are excluded from XIRR.
 
+## Settings
+- User choices have no invented defaults: targets and the emergency fund start unset ("Set your
+  targets", empty state). Projection rates ship as flagged placeholders until reviewed.
+- The monthly budget and split come from the workbook's `monthly_plan`; planner overrides are
+  temporary.
+- The emergency fund is never included in portfolio value, P&L, XIRR, allocation, snapshots or
+  the planner (tested).
+
 ## Language and safety
 - Neutral wording: "Adding ₹1,000 here would raise X from a% to b%". Never "buy/sell X".
 - Suggestions are labelled "Allocation consideration". No return guarantees or price
   predictions. Projections are "mathematical scenario" with assumptions shown.
+- Projection wording: "If the portfolio averaged X% annually and contributions were Y, the
+  mathematical future value would be approximately Z." Never "you will have".
+- Time series show only stored snapshots; never back-fill or estimate history.
 - Show the date of all data; separate historical data from assumptions.
 - Footer disclaimer: personal analytics tool, not investment advice.
 
