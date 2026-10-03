@@ -57,9 +57,11 @@ def get_engine() -> Engine:
 
 
 def init_db() -> None:
+    """Bring the schema to the latest migration (backing up a file DB first if needed)."""
     from app import models  # noqa: F401  (register tables)
+    from app.migrate import migrate
 
-    Base.metadata.create_all(get_engine())
+    migrate(get_engine())
 
 
 @contextmanager

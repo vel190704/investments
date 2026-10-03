@@ -4,14 +4,16 @@ VENV    := backend/.venv
 BIN     := $(VENV)/bin
 FILE    ?= data/personal_investment_tracker_clean.xlsx
 
-.PHONY: help setup backend frontend dev test test-backend test-frontend import refresh lint
+.PHONY: help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate
 
 help:
 	@echo "make setup      install backend (venv) + frontend (npm) dependencies"
 	@echo "make dev        run backend :8000 and frontend :3000 (Ctrl-C stops both)"
 	@echo "make test       run backend pytest + frontend formatter tests"
 	@echo "make import     import $(FILE)   (override: make import FILE=path.xlsx)"
-	@echo "make refresh    fetch latest prices/NAVs now"
+	@echo "make refresh    fetch latest prices/NAVs now (also stores today's snapshot)"
+	@echo "make backup     copy the SQLite DB to data/backups/"
+	@echo "make migrate    apply DB migrations (backs up first; also runs on backend start)"
 
 setup:
 	test -d $(VENV) || $(PY) -m venv $(VENV)
@@ -47,3 +49,9 @@ import:
 
 refresh:
 	cd backend && .venv/bin/python -m app.refresh
+
+backup:
+	cd backend && .venv/bin/python -m app.migrate --backup-only
+
+migrate:
+	cd backend && .venv/bin/python -m app.migrate
