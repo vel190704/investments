@@ -10,6 +10,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -45,8 +46,12 @@ class Instrument(Base):
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="instrument")
 
 
+TXN_SOURCES = ("excel", "ui")
+
+
 class Transaction(Base):
     __tablename__ = "transactions"
+    __table_args__ = (CheckConstraint("source IN ('excel', 'ui')", name="ck_transactions_source"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
@@ -154,3 +159,77 @@ class RefreshRun(Base):
     ok_count: Mapped[int] = mapped_column(Integer, default=0)
     error_count: Mapped[int] = mapped_column(Integer, default=0)
     results: Mapped[list] = mapped_column(JSON, default=list)
+
+
+class PortfolioSnapshot(Base):
+    """One row per IST calendar date (upserted)."""
+
+    __tablename__ = "portfolio_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    snapshot_date: Mapped[date] = mapped_column(Date, unique=True)
+    total_value_paise: Mapped[int] = mapped_column(BigInteger)  # priced holdings only
+    total_invested_paise: Mapped[int] = mapped_column(BigInteger)  # all open holdings
+    invested_priced_paise: Mapped[int] = mapped_column(BigInteger)
+    unpriced: Mapped[list] = mapped_column(JSON, default=list)  # names of holdings without a price
+    trigger: Mapped[str] = mapped_column(String(20))  # refresh | scheduled | startup | manual
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    asset_classes: Mapped[list["SnapshotAssetClass"]] = relationship(
+        back_populates="snapshot", cascade="all, delete-orphan")
+    holdings: Mapped[list["SnapshotHolding"]] = relationship(
+        back_populates="snapshot", cascade="all, delete-orphan")
+
+
+class SnapshotAssetClass(Base):
+    __tablename__ = "snapshot_asset_classes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("portfolio_snapshots.id", ondelete="CASCADE"), index=True)
+    asset_class: Mapped[str] = mapped_column(String(50))
+    value_paise: Mapped[int] = mapped_column(BigInteger)
+    invested_paise: Mapped[int] = mapped_column(BigInteger)
+
+    snapshot: Mapped[PortfolioSnapshot] = relationship(back_populates="asset_classes")
+
+
+class SnapshotHolding(Base):
+    __tablename__ = "snapshot_holdings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("portfolio_snapshots.id", ondelete="CASCADE"), index=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"))
+    asset_class: Mapped[str] = mapped_column(String(50))
+    quantity: Mapped[Decimal] = mapped_column(DecimalText)
+    avg_cost: Mapped[Decimal | None] = mapped_column(DecimalText)
+    invested_paise: Mapped[int] = mapped_column(BigInteger)
+    price: Mapped[Decimal | None] = mapped_column(DecimalText)
+    price_date: Mapped[date | None] = mapped_column(Date)
+    price_source: Mapped[str | None] = mapped_column(String(50))
+    value_paise: Mapped[int | None] = mapped_column(BigInteger)
+
+    snapshot: Mapped[PortfolioSnapshot] = relationship(back_populates="holdings")
+
+
+class AppSetting(Base):
+    """One row per settings section (targets, drift, concentration, projection, emergency_fund)."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ChangeLogEntry(Base):
+    __tablename__ = "change_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    kind: Mapped[str] = mapped_column(String(30))  # TXN_ADDED|TXN_REMOVED|QTY_CHANGED|AVG_COST_CHANGED|ALLOCATION_CHANGED
+    instrument_id: Mapped[int | None] = mapped_column(ForeignKey("instruments.id"))
+    snapshot_date: Mapped[date | None] = mapped_column(Date, index=True)
+    cause: Mapped[str] = mapped_column(String(20))  # import | ui | snapshot
+    summary: Mapped[str] = mapped_column(Text)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)

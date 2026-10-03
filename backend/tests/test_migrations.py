@@ -99,3 +99,14 @@ def test_real_database_copy_migrates_with_data_preserved(tmp_path, monkeypatch):
     with sqlite3.connect(copy) as c:
         for t, n in before.items():
             assert c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] == n
+
+
+def test_transaction_source_check_constraint(session, workbook):
+    from sqlalchemy.exc import IntegrityError
+
+    from app.importer.run import import_workbook
+
+    import_workbook(session, workbook)
+    with pytest.raises(IntegrityError):
+        session.execute(text("UPDATE transactions SET source = 'broker'"))
+        session.flush()
