@@ -40,6 +40,11 @@ class Instrument(Base):
     exposure: Mapped[str] = mapped_column(String(20), default="DOMESTIC")  # DOMESTIC | INTERNATIONAL
     category: Mapped[str | None] = mapped_column(String(100))
     platform: Mapped[str | None] = mapped_column(String(50))
+    # Phase 3 classification
+    asset_class_override: Mapped[str | None] = mapped_column(String(50))
+    etf_underlying: Mapped[str | None] = mapped_column(String(50))  # NSE: EQUITY|COMMODITY|DEBT|GLOBAL INDICES
+    etf_underlying_key: Mapped[str | None] = mapped_column(String(100))  # NSE: GOLD, SILVER, Nifty 50, ...
+    region: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -233,3 +238,73 @@ class ChangeLogEntry(Base):
     cause: Mapped[str] = mapped_column(String(20))  # import | ui | snapshot
     summary: Mapped[str] = mapped_column(Text)
     details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class SectorAssignment(Base):
+    """Sector per instrument and origin. Effective sector: MANUAL > EXCEL > NSE."""
+
+    __tablename__ = "sector_assignments"
+    __table_args__ = (UniqueConstraint("instrument_id", "origin"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
+    origin: Mapped[str] = mapped_column(String(10))  # NSE | EXCEL | MANUAL
+    sector: Mapped[str] = mapped_column(String(100))
+    source: Mapped[str] = mapped_column(String(200))
+    as_of: Mapped[date] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(Text)
+
+
+class InstrumentFact(Base):
+    """Fundamentals / fund facts. AUTO rows come from a data source, MANUAL rows from the user."""
+
+    __tablename__ = "instrument_facts"
+    __table_args__ = (UniqueConstraint("instrument_id", "metric", "origin"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
+    metric: Mapped[str] = mapped_column(String(40))
+    origin: Mapped[str] = mapped_column(String(10))  # AUTO | MANUAL
+    status: Mapped[str] = mapped_column(String(10), default="OK")  # OK | MISSING | REJECTED
+    value: Mapped[Decimal | None] = mapped_column(DecimalText)
+    value_text: Mapped[str | None] = mapped_column(String(300))
+    source: Mapped[str] = mapped_column(String(300))
+    as_of: Mapped[date | None] = mapped_column(Date)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    note: Mapped[str | None] = mapped_column(Text)
+
+
+class FundDisclosure(Base):
+    """One uploaded portfolio disclosure (or index-weight file) for a fund and month."""
+
+    __tablename__ = "fund_disclosures"
+    __table_args__ = (UniqueConstraint("instrument_id", "kind", "as_of"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # AMC_DISCLOSURE | INDEX_WEIGHTS
+    as_of: Mapped[date] = mapped_column(Date)
+    index_name: Mapped[str | None] = mapped_column(String(100))
+    parser: Mapped[str] = mapped_column(String(50))
+    source_file: Mapped[str] = mapped_column(String(300))
+    file_sha256: Mapped[str] = mapped_column(String(64))
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    equity_weight: Mapped[Decimal] = mapped_column(DecimalText)
+    rows: Mapped[int] = mapped_column(Integer)
+
+    holdings: Mapped[list["DisclosureHolding"]] = relationship(back_populates="disclosure",
+                                                               cascade="all, delete-orphan")
+
+
+class DisclosureHolding(Base):
+    __tablename__ = "disclosure_holdings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    disclosure_id: Mapped[int] = mapped_column(ForeignKey("fund_disclosures.id", ondelete="CASCADE"), index=True)
+    isin: Mapped[str | None] = mapped_column(String(20), index=True)
+    name: Mapped[str] = mapped_column(String(300))
+    industry: Mapped[str | None] = mapped_column(String(150))
+    weight: Mapped[Decimal] = mapped_column(DecimalText)  # fraction of fund NAV
+    is_equity: Mapped[bool] = mapped_column(Boolean)
+
+    disclosure: Mapped[FundDisclosure] = relationship(back_populates="holdings")
