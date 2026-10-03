@@ -165,9 +165,9 @@ function LookthroughView({ l }: { l: Lookthrough }) {
               <thead className="text-xs text-muted-foreground">
                 <tr>
                   <th className="py-1 text-left font-normal">Company</th>
-                  <th className="py-1 text-right font-normal">Direct</th>
-                  {fundCols.map((f) => <th key={f} className="py-1 text-right font-normal">via {f.split(" - ")[0]}</th>)}
-                  <th className="py-1 text-right font-normal">Total</th>
+                  <th className="py-1 pl-4 text-right font-normal">Direct</th>
+                  {fundCols.map((f) => <th key={f} className="max-w-36 py-1 pl-4 text-right font-normal">via {f.split(" - ")[0]}</th>)}
+                  <th className="py-1 pl-4 text-right font-normal">Total</th>
                   <th className="py-1 pl-3 text-left font-normal">Level</th>
                 </tr>
               </thead>
@@ -179,12 +179,12 @@ function LookthroughView({ l }: { l: Lookthrough }) {
                       <div className="text-xs text-muted-foreground">{c.isin}</div>
                       {c.reason && <div className="text-xs text-muted-foreground">Reason: {c.reason}</div>}
                     </td>
-                    <td className="py-1.5 text-right">{c.direct_paise ? formatPct(c.direct_pct, 2) : "—"}</td>
+                    <td className="py-1.5 pl-4 text-right">{c.direct_paise ? formatPct(c.direct_pct, 2) : "—"}</td>
                     {fundCols.map((f) => {
                       const v = c.via.find((x) => x.fund === f);
-                      return <td key={f} className="py-1.5 text-right text-muted-foreground">{v ? formatPct(v.pct, 2) : "—"}</td>;
+                      return <td key={f} className="py-1.5 pl-4 text-right text-muted-foreground">{v ? formatPct(v.pct, 2) : "—"}</td>;
                     })}
-                    <td className="py-1.5 text-right font-medium">{formatPct(c.total_pct, 2)}</td>
+                    <td className="py-1.5 pl-4 text-right font-medium">{formatPct(c.total_pct, 2)}</td>
                     <td className="py-1.5 pl-3">{c.level && <LevelBadge level={c.level} />}</td>
                   </tr>
                 ))}

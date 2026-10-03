@@ -10,6 +10,7 @@ It never places orders. See PLAN.md for the design and README.md for usage.
 - `make import FILE=data/personal_investment_tracker_clean.xlsx` — CLI import
 - `make refresh` — fetch prices/NAVs and store today's snapshot
 - `make backup` / `make migrate` — SQLite backup to data/backups/ / apply Alembic migrations
+- `make fundamentals` — fetch fundamentals (yfinance) now
 - `make lint` — eslint + tsc; `make test` also runs the frontend formatter tests
 - Backend only: `cd backend && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload`
 - Frontend only: `cd frontend && npm run dev`
@@ -58,6 +59,20 @@ It never places orders. See PLAN.md for the design and README.md for usage.
 - Identifier matches (ISIN, AMFI scheme code) are proposed, never silently applied: the user
   confirms them on the Mappings screen.
 - OPENING rows count for quantity/invested/value/P&L but are excluded from XIRR.
+
+## Classification and look-through
+- Effective asset class: manual override > ETF by NSE "ETF Underlying" > Phase 1 rule. Effective sector:
+  MANUAL > EXCEL (holdings_fallback.sector) > NSE index lists. Overrides are always tagged "manual".
+- Fund look-through matches companies by **ISIN only** (equity = security code 01). A stock without a
+  confirmed ISIN is listed as "not combined", never matched by name.
+- AMC parsers live in `app/disclosures/engine.py` (one Layout per AMC). Unknown layouts must raise
+  `DisclosureFormatError` with what was looked for and found; tests use synthetic fixtures built in
+  `tests/disclosure_fixtures.py`, never real downloads.
+- Fundamentals: a value is shown only if the source provided it and it passes the bounds in
+  `app/calc/fundamentals.py`; otherwise "N/A (reason)". Manual values need a source note and an
+  as-of date and are shown with a "manual" tag. Never scrape sites whose terms forbid it.
+- Portfolio Health has no overall score or ranking; LOW/MODERATE/HIGH only where a threshold exists
+  in code (editable in Settings › health); everything else is "information only".
 
 ## Settings
 - User choices have no invented defaults: targets and the emergency fund start unset ("Set your

@@ -3,8 +3,7 @@
 Single-user, local-first portfolio analytics and planning tool for an Indian retail investor.
 It **never places orders**. Excel workbook = source of truth for transactions.
 
-Status: Phases 0–2 done (§10 = Phase 2). Phase 3 (§11) in progress: classification, sectors,
-fundamentals, fund facts, fund look-through and overlap, portfolio health, simulator look-through.
+Status: Phases 0–3 done (§10 = Phase 2, §11 = Phase 3). Phase 4 is next.
 
 ---
 

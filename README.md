@@ -8,6 +8,9 @@ contribution would change your mix.
 It also tracks daily history, allocation drift against your own targets, a monthly
 contribution planner, mathematical projections, and a separate emergency fund.
 
+It shows sector exposure, fundamentals, and what your funds hold combined with your direct
+stocks (look-through), plus a Portfolio Health page with no overall score.
+
 It **never places orders**, has no login, and binds only to `127.0.0.1`.
 *Personal analytics tool, not investment advice.*
 
@@ -42,6 +45,7 @@ The schema is managed with Alembic (`backend/migrations/`).
 
 ```bash
 make backup         # ad-hoc consistent copy of the DB into data/backups/
+make fundamentals   # fetch fundamentals now (also refreshed every Sunday by the daily job)
 make migrate        # apply migrations now (backs up first)
 ```
 
@@ -76,6 +80,11 @@ make migrate        # apply migrations now (backs up first)
 | Monthly planner | budget modes; distribution by monthly_plan and by your targets; allocation considerations |
 | Projection | Conservative / Base / Higher mathematical scenarios with formula and assumptions |
 | Emergency fund | target, % complete, remaining (never part of the portfolio) |
+| Portfolio health | separate dimensions with reasons: company (look-through), sector, drift, overlap, international, liquidity, volatility, emergency fund |
+| Sectors | sector exposure incl. funds, HHI and largest sector, geography, your desired ranges and themes |
+| Fund look-through | upload AMC disclosures / index weights; total company exposure (direct + via funds); pairwise overlap |
+| Fundamentals | per-stock metrics from Yahoo Finance with source/date; manual ROCE, promoter holding, alpha; fund facts |
+| Classification | override asset class (e.g. Gold, Debt/Cash), sector and region per instrument |
 | Import / Mappings / Settings | data management |
 
 ## In-app transactions and export
@@ -162,6 +171,43 @@ make import FILE=data/another_file.xlsx
 cd backend && .venv/bin/python -m app.import_excel ../data/file.xlsx --no-resolve   # offline
 ```
 
+## Fund holdings: downloading and uploading AMC disclosures
+
+SEBI requires every AMC to publish its schemes' portfolios each month, usually by the 10th, as
+of the last day of the previous month. Look-through and overlap use these files.
+
+1. Download the **monthly portfolio** file (Excel) from the AMC's website. It is normally under
+   *Downloads* or *Statutory Disclosures*, as *Monthly Portfolio* or *Portfolio Disclosure*.
+   Site menus change; search the AMC site for "monthly portfolio".
+   - **HDFC Mutual Fund**: hdfcfund.com → Statutory Disclosures → Monthly Portfolio. One workbook
+     per month with one sheet per scheme. Upload the whole file; the sheet for your fund is
+     found by name.
+   - **ICICI Prudential Mutual Fund**: icicipruamc.com → Downloads → Monthly Portfolio
+     Disclosures. A per-scheme or all-scheme workbook.
+   - **Kotak Mahindra Mutual Fund**: kotakmf.com → Downloads / Statutory Disclosures → Portfolios
+     → Monthly.
+2. Open **Fund look-through** and choose the fund. Leave "AMC layout" on *Detect from file*, or
+   pick the AMC, then upload the `.xlsx`.
+   - The as-of date is read from the "Portfolio as on …" line. You can type it if the file has
+     none.
+   - Uploading the same fund and month again replaces it; other months are kept, and the newest
+     is used.
+3. If the parser says **"Unrecognised layout"**, the error shows the header row it found. The
+   AMC has probably renamed a column. Add the new name to that AMC's aliases in
+   `backend/app/disclosures/engine.py` (and a fixture test). The parsers were written from the
+   AMCs' published column names and tested on small synthetic files, not real downloads.
+
+**Index funds** (Nifty 50, Nifty Next 50) can also use index constituent weights as an
+approximation:
+- Choose *Index constituent weights (.csv)*.
+- Enter the index name and as-of date.
+- Upload a CSV with columns `ISIN, Company Name, Weightage %` (optional `Industry`). Weights are
+  in NSE's monthly index factsheets; NSE's downloadable constituent lists have no weights.
+
+These are labelled "approximated from index weights, as of <date>". A disclosure older than two
+months is flagged as stale. Enter the tracking difference on Fundamentals to see how closely
+the fund follows its index.
+
 ## Data sources
 
 | what | source | notes |
@@ -170,6 +216,12 @@ cd backend && .venv/bin/python -m app.import_excel ../data/file.xlsx --no-resolv
 | MF NAVs | AMFI `NAVAll.txt` | latest NAV only; "today's change" for funds appears once a previous NAV is cached |
 | ISINs | NSE `EQUITY_L.csv`, `eq_etfseclist.csv` | |
 | Scheme codes | AMFI `NAVAll.txt` | |
+| Stock sectors | NSE index constituent lists (Nifty Total Market, Microcap 250), "Industry" | stocks in neither list stay "Unclassified" until overridden |
+| ETF classes / regions | NSE ETF list: ETF Underlying + Underlying Asset | Gold, Debt/Cash, International, … by what the ETF holds |
+| Fund category | AMFI `NAVAll.txt` section headers | needs a confirmed scheme code |
+| Fundamentals | Yahoo Finance via yfinance | only plausible values; otherwise N/A with the reason |
+| ROCE, promoter holding, alpha, expense ratio, exit load, tracking error/difference | **manual** (source note + as-of date required) | no reliable free source; nothing is scraped |
+| Fund holdings | your uploads of AMC disclosures / index weights | |
 
 Every market-derived number shows its source and date. Anything missing shows
 "Data unavailable"; nothing is estimated.

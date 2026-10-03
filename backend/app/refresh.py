@@ -11,6 +11,13 @@ def main() -> int:
     with session_scope() as s:
         r = refresh_prices(s, trigger="manual")
     print(f"{r['ok_count']} updated, {r['error_count']} unavailable")
+    try:
+        from app.services.classification import refresh_classification
+
+        with session_scope() as s:
+            print("Classification:", refresh_classification(s)["summary"])
+    except Exception as e:  # never fail the price refresh because of classification
+        print(f"Classification skipped: {e}")
     snap = r.get("snapshot")
     if snap:
         print(f"Snapshot stored for {snap['snapshot_date']}" + (f" (partial: no price for {len(snap['unpriced'])} holding(s))"

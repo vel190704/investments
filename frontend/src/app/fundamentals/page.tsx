@@ -41,7 +41,7 @@ export default function FundamentalsPage() {
     return (
       <td className="py-1.5 pr-3 text-right align-top" title={title}>
         {c.display_na ? (
-          <span className="text-xs text-muted-foreground">{c.display_na}</span>
+          <span className="block text-xs text-muted-foreground">{c.display_na}</span>
         ) : (
           <>
             <div>{c.text ?? fmt(c, c.value)}{c.manual && <span className="ml-1 rounded border border-series-1/50 px-1 text-[10px] text-series-1">manual</span>}</div>
@@ -52,7 +52,7 @@ export default function FundamentalsPage() {
           <div className="text-[11px] text-muted-foreground">within my portfolio: {fmt(c, c.portfolio_sector_median)}</div>
         )}
         {c.manual_allowed && (
-          <button type="button" className="text-[11px] text-muted-foreground underline" onClick={() => setEditing({ iid, cell: c, name })}>
+          <button type="button" className="mt-0.5 block w-full text-right text-[11px] text-muted-foreground underline" onClick={() => setEditing({ iid, cell: c, name })}>
             {c.manual ? "edit" : "enter"}
           </button>
         )}
