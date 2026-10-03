@@ -72,8 +72,13 @@ class Flag:
     thresholds: str
 
 
-def company_concentration(companies: list[tuple[str, int]], total_portfolio_paise: int) -> dict:
-    """companies: [(display name, current value paise)] for direct stocks with a price."""
+def company_concentration(companies: list[tuple[str, int]], total_portfolio_paise: int,
+                          thresholds: dict[str, Threshold] | None = None) -> dict:
+    """companies: [(display name, current value paise)] for direct stocks with a price.
+
+    thresholds: user-configured values from Settings; defaults to THRESHOLDS.
+    """
+    th = thresholds or THRESHOLDS
     companies = sorted([c for c in companies if c[1] > 0], key=lambda c: c[1], reverse=True)
     equity_total = sum(v for _, v in companies)
     result: dict = {
@@ -86,7 +91,7 @@ def company_concentration(companies: list[tuple[str, int]], total_portfolio_pais
         "hhi": None,
         "flags": [],
         "thresholds": [
-            {**asdict(t), "low": str(t.low), "high": str(t.high)} for t in THRESHOLDS.values()
+            {**asdict(t), "low": str(t.low), "high": str(t.high)} for t in th.values()
         ],
     }
     if equity_total == 0:
@@ -115,7 +120,7 @@ def company_concentration(companies: list[tuple[str, int]], total_portfolio_pais
 
     flags: list[Flag] = []
 
-    t = THRESHOLDS["largest_company_of_direct_equity"]
+    t = th["largest_company_of_direct_equity"]
     lvl = level_for(largest["share_of_direct_equity"], t)
     flags.append(Flag(
         t.key, "Company concentration (direct equity)", lvl,
@@ -126,7 +131,7 @@ def company_concentration(companies: list[tuple[str, int]], total_portfolio_pais
         f"LOW < {_fmt_threshold(t.low, t.unit)} ≤ MODERATE < {_fmt_threshold(t.high, t.unit)} ≤ HIGH",
     ))
 
-    t = THRESHOLDS["top3_of_direct_equity"]
+    t = th["top3_of_direct_equity"]
     lvl = level_for(top3_share, t)
     names = ", ".join(r["name"] for r in top3)
     flags.append(Flag(
@@ -137,7 +142,7 @@ def company_concentration(companies: list[tuple[str, int]], total_portfolio_pais
         f"LOW < {_fmt_threshold(t.low, t.unit)} ≤ MODERATE < {_fmt_threshold(t.high, t.unit)} ≤ HIGH",
     ))
 
-    t = THRESHOLDS["hhi_direct_equity"]
+    t = th["hhi_direct_equity"]
     lvl = level_for(hhi, t)
     terms = " + ".join(f"{(r['share_of_direct_equity'] * 100).quantize(Decimal('0.1'))}²" for r in rows[:4])
     more = " + …" if len(rows) > 4 else ""
@@ -149,7 +154,7 @@ def company_concentration(companies: list[tuple[str, int]], total_portfolio_pais
     ))
 
     if tot:
-        t = THRESHOLDS["largest_company_of_portfolio"]
+        t = th["largest_company_of_portfolio"]
         share = largest["share_of_portfolio"]
         lvl = level_for(share, t)
         flags.append(Flag(

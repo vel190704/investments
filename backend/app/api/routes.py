@@ -300,3 +300,32 @@ def changes(limit: int = 200, kind: str | None = None, session: Session = Depend
     return [{"id": e.id, "occurred_at": as_utc(e.occurred_at).isoformat(), "kind": e.kind, "cause": e.cause,
              "instrument_id": e.instrument_id, "snapshot_date": e.snapshot_date.isoformat() if e.snapshot_date else None,
              "summary": e.summary, "details": e.details} for e in session.scalars(q)]
+
+
+# ---------------- settings
+@router.get("/settings")
+def get_settings_all(session: Session = Depends(get_session)):
+    from app.services.settings import TARGET_CLASSES, all_settings
+
+    return {"sections": all_settings(session), "target_classes": TARGET_CLASSES}
+
+
+@router.put("/settings/{section}")
+def put_setting(section: str, value: dict, session: Session = Depends(get_session)):
+    from app.services.settings import SettingsError, put
+
+    try:
+        return {"section": section, "value": put(session, section, value)}
+    except SettingsError as e:
+        raise HTTPException(422, str(e)) from None
+
+
+@router.delete("/settings/{section}")
+def reset_setting(section: str, session: Session = Depends(get_session)):
+    from app.services.settings import SettingsError, reset
+
+    try:
+        reset(session, section)
+    except SettingsError as e:
+        raise HTTPException(404, str(e)) from None
+    return {"section": section, "reset": True}

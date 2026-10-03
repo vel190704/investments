@@ -189,10 +189,12 @@ def _asset_classes(rows: list[HoldingRow], total: int) -> list[dict]:
             for c, v in vals.items()]
 
 
-def concentration(rows: list[HoldingRow], total: int) -> dict:
+def concentration(rows: list[HoldingRow], total: int, session: Session | None = None) -> dict:
+    from app.services.settings import concentration_thresholds
+
     comps = [(r.inst.symbol or r.inst.name, r.value_paise) for r in rows
              if r.inst.asset_type == "STOCK" and r.value_paise is not None]
-    c = company_concentration(comps, total)
+    c = company_concentration(comps, total, concentration_thresholds(session) if session else None)
     def conv(d):
         if isinstance(d, Decimal):
             return s(d, 8)
@@ -259,7 +261,7 @@ def summary(session: Session) -> dict:
         "top_holdings": [{"instrument_id": r.inst.id, "name": r.inst.name, "short_name": r.inst.symbol or r.inst.name,
                           "asset_class": r.asset_class, "value_paise": r.value_paise,
                           "weight": s(Decimal(r.value_paise) / total, 8)} for r in top],
-        "concentration_flags": concentration(rows, total)["flags"],
+        "concentration_flags": concentration(rows, total, session)["flags"],
         "xirr": _x(px),
         "data_as_of": _as_of(rows),
     }
@@ -279,7 +281,7 @@ def allocation(session: Session) -> dict:
                          "weight": s(w_inst[r.inst.id], 8), "display_pct": s(display_pct(w_inst[r.inst.id], 2))}
                         for r in rows if r.value_paise is not None],
         "excluded_unpriced": [{"name": r.inst.name, "reason": r.unavailable_reason} for r in rows if r.value_paise is None],
-        "concentration": concentration(rows, total),
+        "concentration": concentration(rows, total, session),
         "data_as_of": _as_of(rows),
     }
 
