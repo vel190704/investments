@@ -45,6 +45,8 @@ def test_add_to_fund_moves_weights_and_conserves_total(book):
     lt = next(x for x in r["top_companies"] if x["name"] == "LT")
     assert D(lt["after"]) < D(lt["before"])  # dilution
     assert r["sentences"][0].startswith("Adding ₹1,000 here would raise your Nifty 50 index fund exposure from ")
+    assert any(t.startswith("Mutual funds would go from ") for t in r["sentences"])
+    assert any(t.startswith("LT (your largest company holding) would go from ") for t in r["sentences"])
     assert r["legs"][0]["units"] == "4.213"  # 1000 / 237.33, 3 dp, rounded down
 
 

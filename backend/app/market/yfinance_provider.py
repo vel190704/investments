@@ -13,7 +13,8 @@ SOURCE = "Yahoo Finance (yfinance)"
 
 
 def _dec(v: float) -> Decimal:
-    return Decimal(repr(round(float(v), 4)))
+    """NSE prices have 2 decimals; yfinance returns float32-ish values (3693.39990234375)."""
+    return Decimal(repr(round(float(v), 2)))
 
 
 def quote_from_history(df, ticker: str) -> Quote | FetchError:

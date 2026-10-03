@@ -3,7 +3,7 @@ from decimal import Decimal as D
 import pytest
 
 from app.calc.allocation import (
-    asset_class_of, derive_category, round_weights_for_display, weights,
+    asset_class_of, derive_category, display_pct, weights,
 )
 from app.calc.concentration import THRESHOLDS, company_concentration, level_for
 
@@ -16,10 +16,17 @@ def test_weights_sum_to_one_and_use_value_not_quantity():
 
 
 @pytest.mark.parametrize("n", [3, 7, 19])
-def test_display_rounding_sums_to_exactly_100(n):
+def test_exact_weights_sum_to_one_and_display_is_within_rounding(n):
     values = {i: 1000 + i * 37 for i in range(n)}
-    disp = round_weights_for_display(weights(values), 1)
-    assert sum(disp.values()) == D("100.0")
+    w = weights(values)
+    assert abs(sum(w.values()) - 1) < D("1e-25")
+    disp = [display_pct(x) for x in w.values()]
+    assert abs(sum(disp) - 100) <= D("0.05") * n  # each figure is off by at most half a unit
+
+
+def test_display_pct_half_up():
+    assert display_pct(D("0.42650")) == D("42.7")
+    assert display_pct(D("0.123449"), 2) == D("12.34")
 
 
 def test_weights_of_empty_portfolio():

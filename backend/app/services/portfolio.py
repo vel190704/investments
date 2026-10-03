@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import repository as repo
 from app.calc.allocation import (
-    ASSET_CLASS_ORDER, asset_class_of, round_weights_for_display, weights,
+    ASSET_CLASS_ORDER, asset_class_of, display_pct, weights,
 )
 from app.calc.concentration import company_concentration
 from app.calc.positions import Position, TxnInput, replay
@@ -146,8 +146,8 @@ def _asset_classes(rows: list[HoldingRow], total: int) -> list[dict]:
             vals[r.asset_class] += r.value_paise
     vals = {c: v for c, v in vals.items() if v > 0}
     w = weights(vals, total)
-    disp = round_weights_for_display(w, 1)
-    return [{"name": c, "value_paise": v, "weight": s(w[c], 8), "display_pct": s(disp[c])} for c, v in vals.items()]
+    return [{"name": c, "value_paise": v, "weight": s(w[c], 8), "display_pct": s(display_pct(w[c]))}
+            for c, v in vals.items()]
 
 
 def concentration(rows: list[HoldingRow], total: int) -> dict:
@@ -230,14 +230,14 @@ def allocation(session: Session) -> dict:
     rows, _ = load_rows(session)
     total = sum(r.value_paise for r in rows if r.value_paise is not None)
     w_inst = weights({r.inst.id: r.value_paise for r in rows if r.value_paise is not None}, total)
-    disp = round_weights_for_display(w_inst, 2)
     return {
         "total_value_paise": total,
-        "basis": "Weight = current market value / total portfolio value (priced holdings only).",
+        "basis": "Weight = current market value / total portfolio value (priced holdings only). "
+                 "Percentages are rounded half-up, so they may not add to exactly 100.",
         "asset_classes": _asset_classes(rows, total),
         "instruments": [{"instrument_id": r.inst.id, "name": r.inst.name, "short_name": r.inst.symbol or r.inst.name,
                          "asset_class": r.asset_class, "value_paise": r.value_paise,
-                         "weight": s(w_inst[r.inst.id], 8), "display_pct": s(disp[r.inst.id])}
+                         "weight": s(w_inst[r.inst.id], 8), "display_pct": s(display_pct(w_inst[r.inst.id], 2))}
                         for r in rows if r.value_paise is not None],
         "excluded_unpriced": [{"name": r.inst.name, "reason": r.unavailable_reason} for r in rows if r.value_paise is None],
         "concentration": concentration(rows, total),

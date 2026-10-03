@@ -58,7 +58,7 @@ def _fmt_threshold(v: Decimal, unit: str) -> str:
 def _level_reason(level: str, t: Threshold) -> str:
     lo, hi = _fmt_threshold(t.low, t.unit), _fmt_threshold(t.high, t.unit)
     return {"LOW": f"LOW because < {lo}", "MODERATE": f"MODERATE because {lo} to < {hi}",
-            "HIGH": f"HIGH because >= {hi}"}[level]
+            "HIGH": f"HIGH because ≥ {hi}"}[level]
 
 
 @dataclass
@@ -123,7 +123,7 @@ def company_concentration(companies: list[tuple[str, int]], total_portfolio_pais
         f"{largest['name']} is {format_pct(largest['share_of_direct_equity'])} of direct equity.",
         f"{format_inr(largest['value_paise'])} / {format_inr(equity_total)} = "
         f"{format_pct(largest['share_of_direct_equity'])}; {_level_reason(lvl, t)}.",
-        f"LOW < {_fmt_threshold(t.low, t.unit)} <= MODERATE < {_fmt_threshold(t.high, t.unit)} <= HIGH",
+        f"LOW < {_fmt_threshold(t.low, t.unit)} ≤ MODERATE < {_fmt_threshold(t.high, t.unit)} ≤ HIGH",
     ))
 
     t = THRESHOLDS["top3_of_direct_equity"]
@@ -134,7 +134,7 @@ def company_concentration(companies: list[tuple[str, int]], total_portfolio_pais
         f"{names} together are {format_pct(top3_share)} of direct equity.",
         f"{format_inr(top3_value)} / {format_inr(equity_total)} = {format_pct(top3_share)}; "
         f"{_level_reason(lvl, t)}.",
-        f"LOW < {_fmt_threshold(t.low, t.unit)} <= MODERATE < {_fmt_threshold(t.high, t.unit)} <= HIGH",
+        f"LOW < {_fmt_threshold(t.low, t.unit)} ≤ MODERATE < {_fmt_threshold(t.high, t.unit)} ≤ HIGH",
     ))
 
     t = THRESHOLDS["hhi_direct_equity"]
@@ -145,7 +145,7 @@ def company_concentration(companies: list[tuple[str, int]], total_portfolio_pais
         t.key, "Diversification across companies (HHI)", lvl, f"{hhi.quantize(Decimal('1')):,}",
         f"HHI of {len(rows)} direct stocks is {hhi.quantize(Decimal('1')):,}.",
         f"{terms}{more} = {hhi.quantize(Decimal('1')):,}; {_level_reason(lvl, t)}.",
-        f"LOW < {_fmt_threshold(t.low, t.unit)} <= MODERATE < {_fmt_threshold(t.high, t.unit)} <= HIGH",
+        f"LOW < {_fmt_threshold(t.low, t.unit)} ≤ MODERATE < {_fmt_threshold(t.high, t.unit)} ≤ HIGH",
     ))
 
     if tot:
@@ -157,7 +157,7 @@ def company_concentration(companies: list[tuple[str, int]], total_portfolio_pais
             f"{largest['name']} is {format_pct(share)} of the total portfolio.",
             f"{format_inr(largest['value_paise'])} / {format_inr(total_portfolio_paise)} = "
             f"{format_pct(share)}; {_level_reason(lvl, t)}.",
-            f"LOW < {_fmt_threshold(t.low, t.unit)} <= MODERATE < {_fmt_threshold(t.high, t.unit)} <= HIGH",
+            f"LOW < {_fmt_threshold(t.low, t.unit)} ≤ MODERATE < {_fmt_threshold(t.high, t.unit)} ≤ HIGH",
         ))
 
     result["flags"] = [asdict(f) for f in flags]

@@ -95,10 +95,18 @@ def _verb(before: Decimal, after: Decimal) -> str:
 
 
 def _move(subject: str, before: Decimal, after: Decimal) -> str:
+    """'would raise <subject> from a% to b%' (subject is the object of the verb)."""
     verb = _verb(before, after)
     if verb == "leave unchanged":
         return f"would leave {subject} unchanged at {format_pct(before)}"
     return f"would {verb} {subject} from {format_pct(before)} to {format_pct(after)}"
+
+
+def _goes(subject: str, before: Decimal, after: Decimal) -> str:
+    """'<subject> would go from a% to b% of the portfolio' (subject is the sentence subject)."""
+    if _verb(before, after) == "leave unchanged":
+        return f"{subject} would stay at {format_pct(before)} of the portfolio"
+    return f"{subject} would go from {format_pct(before)} to {format_pct(after)} of the portfolio"
 
 
 def run_scenario(holdings: list[SimHolding], amount_paise: int, scenario: Scenario) -> dict:
@@ -157,18 +165,16 @@ def run_scenario(holdings: list[SimHolding], amount_paise: int, scenario: Scenar
             for h in targets:
                 b = before["mf_categories"].get(h.category, Decimal(0))
                 a = after["mf_categories"].get(h.category, Decimal(0))
-                sentences.append(f"It {_move(f'your {h.category} exposure', b, a)} of the portfolio.")
+                sentences.append(f"{h.category} exposure: {format_pct(b)} → {format_pct(a)} of the portfolio.")
         touched = {by_id[i].asset_class for i in parts}
         for cls in ASSET_CLASS_ORDER:
             if cls in touched:
-                sentences.append(f"{cls} {_move('their share', before['asset_classes'][cls], after['asset_classes'][cls])}.")
+                sentences.append(_goes(cls, before["asset_classes"][cls], after["asset_classes"][cls]) + ".")
         if before["companies"]:
             top_id = max(before["companies"], key=lambda k: before["companies"][k])
             top = by_id[top_id]
-            sentences.append(
-                f"Your largest company holding, {top.short_name}, "
-                f"{_move('its weight', before['companies'][top_id], after['companies'][top_id])}."
-            )
+            sentences.append(_goes(f"{top.short_name} (your largest company holding)",
+                                   before["companies"][top_id], after["companies"][top_id]) + ".")
         if invested < amount_paise:
             sentences.append(f"{format_inr(amount_paise - invested)} would remain uninvested (whole units only).")
 

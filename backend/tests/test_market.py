@@ -77,3 +77,9 @@ def test_amfi_previous_nav_comes_from_cache(session, workbook):
     session.flush()
     row = store_quote(session, kotak.id, Quote(D("20.2442"), date(2026, 10, 1), "AMFI NAVAll.txt", "148745"))
     assert row.previous_close == D("20.10") and row.previous_date == date(2026, 9, 30)
+
+
+def test_yfinance_float_artefacts_rounded_to_paise():
+    idx = pd.to_datetime(["2026-09-30", "2026-10-01"])
+    df = pd.DataFrame({"Close": [3760.0, 3693.39990234375], "Volume": [10, 10]}, index=idx)
+    assert quote_from_history(df, "LT.NS").price == D("3693.4")

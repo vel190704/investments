@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from decimal import ROUND_FLOOR, Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 ASSET_CLASS_MF = "Mutual funds"
 ASSET_CLASS_STOCKS = "Indian stocks"
@@ -57,22 +57,12 @@ def weights(values: dict, total: int | None = None) -> dict:
     return {k: Decimal(v) / t for k, v in values.items()}
 
 
-def round_weights_for_display(fractions: dict, places: int = 1) -> dict:
-    """Largest-remainder rounding of fractions to percentages that sum to exactly 100.
+def display_pct(fraction: Decimal, places: int = 1) -> Decimal:
+    """Fraction -> percentage rounded half-up (the same rounding everywhere in the UI).
 
-    Used only for display; calculations use the exact fractions.
+    Rounded figures may not add up to exactly 100; calculations always use exact fractions.
     """
-    if not fractions:
-        return {}
-    unit = Decimal(1).scaleb(-places)
-    scaled = {k: v * 100 / unit for k, v in fractions.items()}
-    floors = {k: s.to_integral_value(rounding=ROUND_FLOOR) for k, s in scaled.items()}
-    target = (Decimal(100) / unit) if sum(fractions.values()) > 0 else Decimal(0)
-    shortfall = int(target - sum(floors.values()))
-    order = sorted(scaled, key=lambda k: (scaled[k] - floors[k]), reverse=True)
-    for k in order[: max(shortfall, 0)]:
-        floors[k] += 1
-    return {k: floors[k] * unit for k in fractions}
+    return (fraction * 100).quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
 
 
 def asset_class_values(holdings: list[dict]) -> dict[str, int]:
