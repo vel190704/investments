@@ -281,11 +281,22 @@ def _sync(session, report, parsed, fallbacks, plans, file_name, has_errors: bool
         changelog.record_txn(session, "TXN_ADDED", "import", row, row.instrument.symbol or row.instrument.name)
 
     # fallback: only for instruments with no transaction rows
+    from sqlalchemy import delete as sa_delete
+
+    from app.models import SectorAssignment
+
+    # Excel-origin sectors mirror the current file (manual and NSE assignments are untouched)
+    session.execute(sa_delete(SectorAssignment).where(SectorAssignment.origin == "EXCEL"))
     with_txns = repo.instrument_ids_with_transactions(session)
     fb_rows = []
     for f in fallbacks:
         inst = _instrument(session, cache, report, f.instrument_key, f.asset_type, f.name, f.symbol, f.platform)
         used = inst.id not in with_txns
+        if f.sector:
+            from app.services.classification import upsert_assignment
+
+            upsert_assignment(session, inst.id, "EXCEL", f.sector, "Excel holdings_fallback.sector", f.as_of_date,
+                              f"row {f.row}")
         if used:
             report["holdings_fallback"]["used"].append(f.name)
         fb_rows.append(FallbackHolding(

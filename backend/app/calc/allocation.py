@@ -8,13 +8,54 @@ ASSET_CLASS_MF = "Mutual funds"
 ASSET_CLASS_STOCKS = "Indian stocks"
 ASSET_CLASS_INTL_ETF = "International ETFs"
 ASSET_CLASS_IN_ETF = "Indian ETFs"
-ASSET_CLASS_ORDER = [ASSET_CLASS_MF, ASSET_CLASS_STOCKS, ASSET_CLASS_INTL_ETF, ASSET_CLASS_IN_ETF]
+ASSET_CLASS_GOLD = "Gold"
+ASSET_CLASS_DEBT = "Debt/Cash"
+ASSET_CLASS_OTHER_COMMODITY = "Other commodities"
+ASSET_CLASS_ORDER = [ASSET_CLASS_MF, ASSET_CLASS_STOCKS, ASSET_CLASS_INTL_ETF, ASSET_CLASS_IN_ETF, ASSET_CLASS_GOLD,
+                     ASSET_CLASS_DEBT, ASSET_CLASS_OTHER_COMMODITY]
+OVERRIDABLE_CLASSES = [ASSET_CLASS_MF, ASSET_CLASS_STOCKS, ASSET_CLASS_INTL_ETF, ASSET_CLASS_IN_ETF, ASSET_CLASS_GOLD,
+                       ASSET_CLASS_DEBT, ASSET_CLASS_OTHER_COMMODITY]
+
+# Region of global indices named in NSE's ETF list (Underlying Asset). Unknown -> not classified.
+GLOBAL_INDEX_REGION = {
+    "hang seng": "Hong Kong/China",
+    "nyse fang+": "US (technology-heavy)",
+    "nasdaq": "US (technology-heavy)",
+    "s&p 500": "US",
+}
 
 # Per the spec; corroborated by NSE's ETF list ("GLOBAL INDICES" underlying).
 INTERNATIONAL_ETF_SYMBOLS = frozenset({"MAFANG", "HNGSNGBEES"})
 
 
+def classify(asset_type: str, exposure: str, override: str | None = None, etf_underlying: str | None = None,
+             etf_underlying_key: str | None = None) -> str:
+    """Effective asset class: manual override > ETF by NSE underlying > Phase 1 rule."""
+    if override:
+        return override
+    if asset_type == "ETF" and etf_underlying:
+        u, k = etf_underlying.upper(), (etf_underlying_key or "").upper()
+        if u == "COMMODITY":
+            return ASSET_CLASS_GOLD if k == "GOLD" else ASSET_CLASS_OTHER_COMMODITY
+        if u == "DEBT":
+            return ASSET_CLASS_DEBT
+        if u == "GLOBAL INDICES":
+            return ASSET_CLASS_INTL_ETF
+        if u == "EQUITY":
+            return ASSET_CLASS_INTL_ETF if exposure == "INTERNATIONAL" else ASSET_CLASS_IN_ETF
+    return asset_class_of(asset_type, exposure)
+
+
+def region_for_global_index(underlying_asset: str | None) -> str:
+    n = (underlying_asset or "").lower()
+    for needle, region in GLOBAL_INDEX_REGION.items():
+        if needle in n:
+            return region
+    return "International (region not classified)"
+
+
 def asset_class_of(asset_type: str, exposure: str) -> str:
+    """Phase 1 rule (vehicle based); see classify() for the effective class."""
     if asset_type == "MF":
         return ASSET_CLASS_MF
     if asset_type == "STOCK":

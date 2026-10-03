@@ -11,12 +11,12 @@ from decimal import Decimal, InvalidOperation
 
 from sqlalchemy.orm import Session
 
-from app.calc.allocation import ASSET_CLASS_INTL_ETF, ASSET_CLASS_MF, ASSET_CLASS_STOCKS
+from app.calc.allocation import (
+    ASSET_CLASS_DEBT, ASSET_CLASS_GOLD, ASSET_CLASS_INTL_ETF, ASSET_CLASS_MF, ASSET_CLASS_STOCKS,
+)
 from app.calc.concentration import THRESHOLDS, Threshold
 from app.models import AppSetting
 
-ASSET_CLASS_GOLD = "Gold"
-ASSET_CLASS_DEBT = "Debt/Cash"
 TARGET_CLASSES = [ASSET_CLASS_MF, ASSET_CLASS_STOCKS, ASSET_CLASS_INTL_ETF, ASSET_CLASS_GOLD, ASSET_CLASS_DEBT]
 
 DEFAULTS: dict[str, dict | None] = {

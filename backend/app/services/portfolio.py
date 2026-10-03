@@ -12,9 +12,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app import repository as repo
-from app.calc.allocation import (
-    ASSET_CLASS_ORDER, asset_class_of, display_pct, weights,
-)
+from app.calc.allocation import ASSET_CLASS_ORDER, classify, display_pct, weights
 from app.calc.concentration import company_concentration
 from app.calc.positions import OversellError, Position, TxnInput, replay
 from app.calc.simulator import SimHolding
@@ -45,6 +43,10 @@ class HoldingRow:
     @property
     def value_paise(self) -> int | None:
         return value_paise(self.pos.quantity, self.quote.price) if self.quote else None
+
+
+def inst_class(i: Instrument) -> str:
+    return classify(i.asset_type, i.exposure, i.asset_class_override, i.etf_underlying, i.etf_underlying_key)
 
 
 def _last_errors(session: Session) -> dict[int, str]:
@@ -85,7 +87,7 @@ def load_rows(session: Session) -> tuple[list[HoldingRow], dict]:
                 reason = f"{UNAVAILABLE}: AMFI scheme code not confirmed (see Mappings)"
             else:
                 reason = f"{UNAVAILABLE}" + (f": {errors[iid]}" if iid in errors else ": prices not fetched yet")
-        rows.append(HoldingRow(inst, pos, q, reason, asset_class_of(inst.asset_type, inst.exposure)))
+        rows.append(HoldingRow(inst, pos, q, reason, inst_class(inst)))
     rows.sort(key=lambda r: (-(r.value_paise or 0), r.inst.name))
     return rows, closed
 
@@ -94,7 +96,7 @@ def _xirr_items(rows: list[HoldingRow], closed: dict, asset_class: str | None = 
     items = [(r.inst.symbol or r.inst.name, r.pos, r.quote.price if r.quote else None)
              for r in rows if asset_class is None or r.asset_class == asset_class]
     items += [(i.symbol or i.name, p, None) for i, p in closed["positions"]
-              if asset_class is None or asset_class_of(i.asset_type, i.exposure) == asset_class]
+              if asset_class is None or inst_class(i) == asset_class]
     return items
 
 
@@ -111,7 +113,7 @@ def xirr_report(session: Session) -> dict:
                     "asset_class": r.asset_class, "open": True,
                     **_x(position_xirr(r.pos, r.quote.price if r.quote else None, today))} for r in rows]
     instruments += [{"instrument_id": i.id, "name": i.name, "short_name": i.symbol or i.name,
-                     "asset_class": asset_class_of(i.asset_type, i.exposure), "open": False,
+                     "asset_class": inst_class(i), "open": False,
                      **_x(position_xirr(p, None, today))} for i, p in closed["positions"]]
     classes = sorted({x["asset_class"] for x in instruments}, key=ASSET_CLASS_ORDER.index)
     return {
@@ -302,7 +304,7 @@ NOT_HELD_INFO = {
 
 def not_held_panel(rows: list[HoldingRow]) -> list[dict]:
     """Information only — describes the role an asset class can play; not a recommendation."""
-    from app.services.settings import ASSET_CLASS_DEBT, ASSET_CLASS_GOLD
+    from app.calc.allocation import ASSET_CLASS_DEBT, ASSET_CLASS_GOLD
 
     held = {r.asset_class for r in rows}
     return [{"asset_class": c, "text": NOT_HELD_INFO[c]} for c in (ASSET_CLASS_GOLD, ASSET_CLASS_DEBT) if c not in held]
@@ -321,9 +323,14 @@ def drift_block(session: Session, rows: list[HoldingRow], total: int) -> dict:
     for r in rows:
         if r.value_paise is not None:
             values[r.asset_class] = values.get(r.asset_class, 0) + r.value_paise
+    from app.calc.drift import untargeted
+
+    extra = untargeted(values, st.TARGET_CLASSES)
     return {"targets_set": True, "tolerance_pp": str(tol), "message": None,
             "basis": "Indian ETFs, if any, count as Indian stocks. Unpriced holdings are excluded.",
-            "rows": drift(fold_classes(values, st.TARGET_CLASSES), total, targets, tol)}
+            "rows": drift(fold_classes(values, st.TARGET_CLASSES), total, targets, tol),
+            "untargeted": [{"asset_class": c, "value_paise": v, "current": str(Decimal(v) / total) if total else "0"}
+                           for c, v in extra.items()]}
 
 
 def sim_holdings(session: Session) -> tuple[list[SimHolding], list[dict]]:

@@ -17,12 +17,20 @@ def _pp(d: Decimal) -> str:
 
 
 def fold_classes(values: dict[str, int], target_classes: list[str]) -> dict[str, int]:
-    """Map held asset classes onto target classes ('Indian ETFs' are counted with Indian stocks)."""
+    """Map held asset classes onto target classes.
+
+    'Indian ETFs' count with Indian stocks. Classes without a target (e.g. 'Other commodities') are
+    kept under their own name so callers can report them as 'no target'.
+    """
     out = {c: 0 for c in target_classes}
     for cls, v in values.items():
         key = "Indian stocks" if cls == "Indian ETFs" else cls
         out[key] = out.get(key, 0) + v
     return out
+
+
+def untargeted(values: dict[str, int], target_classes: list[str]) -> dict[str, int]:
+    return {c: v for c, v in fold_classes(values, target_classes).items() if c not in target_classes and v}
 
 
 def status_for(deviation_pp: Decimal, tolerance_pp: Decimal) -> str:
@@ -37,7 +45,7 @@ def drift(values: dict[str, int], total_paise: int, targets: dict[str, Decimal],
     """values: paise per target class; targets: fractions summing to 1."""
     rows = []
     t = Decimal(total_paise)
-    for cls, target in targets.items():
+    for cls, target in targets.items():  # untargeted classes are reported separately (see untargeted())
         v = values.get(cls, 0)
         cur = Decimal(v) / t if total_paise else Decimal(0)
         dev = (cur - target) * 100
