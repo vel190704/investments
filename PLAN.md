@@ -222,7 +222,11 @@ disclaimer on every page.
 10. Fund "category" labels (e.g. "Nifty 50 index fund") are derived from the fund name by
     keyword rules and labelled as derived; they are not market data.
 11. yfinance data may be delayed; the as-of shown is the bar date plus fetch time.
-12. Today's date is 2026-10-03, the same as the OPENING rows, so P&L reflects the move from
+12. Displayed percentages are rounded half-up everywhere (so the same weight reads the same on
+    every page); rounded figures may not add to exactly 100.0%. Calculations use exact fractions.
+13. NSE prices from yfinance are rounded to 2 decimals (yfinance returns float artefacts such
+    as 3693.3999).
+14. Today's date is 2026-10-03, the same as the OPENING rows, so P&L reflects the move from
     the opening prices to the latest close.
 
 ## 9. Phases
