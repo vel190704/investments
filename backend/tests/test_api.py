@@ -105,3 +105,50 @@ def test_xirr_endpoint_opening_only(client, workbook):
     assert {c["asset_class"] for c in x["asset_classes"]} == {"Mutual funds", "Indian stocks", "International ETFs"}
     assert all(c["note"] == "N/A (needs dated transactions)" for c in x["asset_classes"])
     assert len(x["instruments"]) == 19
+
+
+TARGETS = {"Mutual funds": "50", "Indian stocks": "30", "International ETFs": "10", "Gold": "5", "Debt/Cash": "5"}
+
+
+def test_drift_requires_targets_then_reports(client, workbook):
+    upload(client, workbook)
+    price_everything()
+    d = client.get("/api/allocation").json()["drift"]
+    assert not d["targets_set"] and d["message"] == "Set your targets in Settings to see drift."
+    assert client.put("/api/settings/targets", json={**TARGETS, "Gold": "6"}).status_code == 422
+    assert client.put("/api/settings/targets", json=TARGETS).status_code == 200
+    a = client.get("/api/allocation").json()
+    rows = {r["asset_class"]: r for r in a["drift"]["rows"]}
+    assert set(rows) == set(TARGETS) and rows["Gold"]["status"] == "WITHIN BAND"  # 0 vs 5: at band edge
+    assert {p["asset_class"] for p in a["not_held"]} == {"Gold", "Debt/Cash"}
+
+
+def test_planner_endpoint(client, workbook):
+    upload(client, workbook)
+    price_everything()
+    p = client.post("/api/planner", json={}).json()
+    assert p["budget_paise"] == 1_000_000 and p["budget_source"] == "monthly_plan sheet"
+    plan, targets = p["modes"]
+    assert plan["available"] and plan["invested_paise"] == 1_000_000
+    assert not targets["available"]
+    client.put("/api/settings/targets", json=TARGETS)
+    p = client.post("/api/planner", json={"budget": "15000", "picks": []}).json()
+    assert p["budget_source"].startswith("temporary override") and all(m["available"] for m in p["modes"])
+    assert sum(c["add_paise"] for c in p["modes"][1]["asset_classes"]) == 1_500_000
+    assert client.post("/api/planner", json={"budget": "abc"}).status_code == 422
+
+
+def test_projection_endpoint_defaults_and_wording(client, workbook):
+    upload(client, workbook)
+    price_everything()
+    r = client.post("/api/projection", json={}).json()
+    total = client.get("/api/portfolio/summary").json()["total_value_paise"]
+    assert r["inputs"]["start_paise"] == total and r["inputs"]["monthly_paise"] == 1_000_000
+    assert r["inputs"]["years"] == 10 and not r["rates_reviewed"] and "placeholders" in r["rates_note"]
+    assert [s["name"] for s in r["scenarios"]] == ["Conservative", "Base", "Higher"]
+    assert r["scenarios"][0]["ending_value_paise"] < r["scenarios"][2]["ending_value_paise"]
+    assert abs(r["closed_form_check_paise"] - r["scenarios"][1]["ending_value_paise"]) <= 1
+    assert r["scenarios"][1]["sentence"].startswith("If the portfolio averaged 9% annually")
+    r = client.post("/api/projection", json={"years": 5, "step_up": "10", "custom_rate": "7.5", "monthly": "8000"}).json()
+    assert [s["name"] for s in r["scenarios"]][-1] == "Custom" and r["inputs"]["step_up_pct"] == "10"
+    assert client.post("/api/projection", json={"years": 99}).status_code == 422

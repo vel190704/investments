@@ -282,8 +282,48 @@ def allocation(session: Session) -> dict:
                         for r in rows if r.value_paise is not None],
         "excluded_unpriced": [{"name": r.inst.name, "reason": r.unavailable_reason} for r in rows if r.value_paise is None],
         "concentration": concentration(rows, total, session),
+        "drift": drift_block(session, rows, total),
+        "not_held": not_held_panel(rows),
         "data_as_of": _as_of(rows),
     }
+
+
+NOT_HELD_INFO = {
+    "Gold": "Gold has historically tended to move differently from equities and is often described as a "
+            "diversifier or a hedge against currency weakness and inflation. It produces no income, and its "
+            "price can fall for long periods. In India it is commonly held through gold ETFs, gold mutual "
+            "funds or Sovereign Gold Bonds.",
+    "Debt/Cash": "Debt and cash holdings (savings, fixed deposits, liquid or short-duration debt funds, government "
+                 "securities) are generally used for stability, liquidity and near-term needs. Their returns are "
+                 "usually lower and steadier than equities, and they carry interest-rate and credit risk "
+                 "instead of equity-market risk.",
+}
+
+
+def not_held_panel(rows: list[HoldingRow]) -> list[dict]:
+    """Information only — describes the role an asset class can play; not a recommendation."""
+    from app.services.settings import ASSET_CLASS_DEBT, ASSET_CLASS_GOLD
+
+    held = {r.asset_class for r in rows}
+    return [{"asset_class": c, "text": NOT_HELD_INFO[c]} for c in (ASSET_CLASS_GOLD, ASSET_CLASS_DEBT) if c not in held]
+
+
+def drift_block(session: Session, rows: list[HoldingRow], total: int) -> dict:
+    from app.calc.drift import drift, fold_classes
+    from app.services import settings as st
+
+    targets = st.targets(session)
+    tol = st.tolerance_pp(session)
+    if not targets:
+        return {"targets_set": False, "tolerance_pp": str(tol), "rows": [],
+                "message": "Set your targets in Settings to see drift."}
+    values: dict[str, int] = {}
+    for r in rows:
+        if r.value_paise is not None:
+            values[r.asset_class] = values.get(r.asset_class, 0) + r.value_paise
+    return {"targets_set": True, "tolerance_pp": str(tol), "message": None,
+            "basis": "Indian ETFs, if any, count as Indian stocks. Unpriced holdings are excluded.",
+            "rows": drift(fold_classes(values, st.TARGET_CLASSES), total, targets, tol)}
 
 
 def sim_holdings(session: Session) -> tuple[list[SimHolding], list[dict]]:

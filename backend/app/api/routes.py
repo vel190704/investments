@@ -329,3 +329,67 @@ def reset_setting(section: str, session: Session = Depends(get_session)):
     except SettingsError as e:
         raise HTTPException(404, str(e)) from None
     return {"section": section, "reset": True}
+
+
+# ---------------- planning
+def _rupees_opt(v: str | None, field: str) -> int | None:
+    if v is None or str(v).strip() == "":
+        return None
+    try:
+        p = rupees_to_paise(v)
+    except (InvalidOperation, ValueError):
+        raise HTTPException(422, f"{field} must be a number of rupees") from None
+    if p < 0:
+        raise HTTPException(422, f"{field} must not be negative")
+    return p
+
+
+class PlannerIn(BaseModel):
+    budget: str | None = None
+    picks: list[int] = []
+
+
+@router.post("/planner")
+def planner(body: PlannerIn, session: Session = Depends(get_session)):
+    from app.services.planning import planner as run
+
+    budget = _rupees_opt(body.budget, "budget")
+    if budget is not None and (budget == 0 or budget > rupees_to_paise(Decimal("10000000"))):
+        raise HTTPException(422, "budget must be between ₹0.01 and ₹1,00,00,000")
+    return run(session, budget, body.picks)
+
+
+class ProjectionIn(BaseModel):
+    start: str | None = None
+    monthly: str | None = None
+    years: int | None = None
+    step_up: str | None = None
+    custom_rate: str | None = None
+
+
+@router.post("/projection")
+def projection(body: ProjectionIn, session: Session = Depends(get_session)):
+    from app.services.planning import projection as run
+
+    def dec(v, name, lo, hi):
+        if v is None or str(v).strip() == "":
+            return None
+        try:
+            d = Decimal(str(v))
+        except InvalidOperation:
+            raise HTTPException(422, f"{name} must be a number") from None
+        if not (lo <= d <= hi):
+            raise HTTPException(422, f"{name} must be between {lo} and {hi}")
+        return d
+
+    if body.years is not None and not 1 <= body.years <= 50:
+        raise HTTPException(422, "years must be between 1 and 50")
+    return run(session, _rupees_opt(body.start, "start"), _rupees_opt(body.monthly, "monthly"), body.years,
+               dec(body.step_up, "step-up", 0, 50), dec(body.custom_rate, "custom rate", -50, 50))
+
+
+@router.get("/emergency-fund")
+def emergency_fund(session: Session = Depends(get_session)):
+    from app.services.planning import emergency_fund as run
+
+    return run(session)
