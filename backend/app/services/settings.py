@@ -26,6 +26,22 @@ DEFAULTS: dict[str, dict | None] = {
     "projection": {"conservative": "6", "base": "9", "higher": "12", "default_years": 10,
                    "default_step_up": "0", "reviewed": False},
     "emergency_fund": None,
+    "sector_ranges": None,
+    "themes": None,
+    "health": {
+        "company_lookthrough": {"low": "0.05", "high": "0.10"},
+        "sector_largest": {"low": "0.25", "high": "0.40"},
+        "sector_hhi": {"low": "1500", "high": "2500"},
+        "overlap": {"low": "0.30", "high": "0.50"},
+        "drift": {"high_multiple": "2"},
+        "emergency": {"moderate_below": "1.0", "high_below": "0.5"},
+    },
+}
+HEALTH_LABELS = {
+    "company_lookthrough": ("Company total exposure (direct + funds), % of portfolio", "fraction"),
+    "sector_largest": ("Largest sector, % of equity exposure", "fraction"),
+    "sector_hhi": ("Sector HHI", "hhi"),
+    "overlap": ("Largest pairwise fund overlap", "fraction"),
 }
 SECTIONS = tuple(DEFAULTS)
 
@@ -96,6 +112,57 @@ def validate(section: str, value: dict) -> dict:
         return {**{k: _s(v) for k, v in rates.items()}, "default_years": years, "default_step_up": _s(step),
                 "reviewed": bool(value.get("reviewed", False))}
 
+    if section == "sector_ranges":
+        out = {}
+        for sector, rg in value.items():
+            if not str(sector).strip() or not isinstance(rg, dict):
+                raise SettingsError("each range needs a sector name and {min, max}")
+            lo = _dec(rg.get("min"), f"{sector} min", Decimal(0), Decimal(100))
+            hi = _dec(rg.get("max"), f"{sector} max", Decimal(0), Decimal(100))
+            if lo > hi:
+                raise SettingsError(f"{sector}: min must not exceed max")
+            out[str(sector).strip()] = {"min": _s(lo), "max": _s(hi)}
+        return out
+
+    if section == "themes":
+        import re
+
+        out = {}
+        for tag, isins in value.items():
+            tag = str(tag).strip()
+            if not tag or not isinstance(isins, list):
+                raise SettingsError("each theme needs a name and a list of company ISINs")
+            clean = []
+            for i in isins:
+                i = str(i).strip().upper()
+                if not re.match(r"^IN[A-Z0-9]{10}$", i):
+                    raise SettingsError(f"{tag}: {i!r} is not an ISIN (themes are matched by ISIN)")
+                clean.append(i)
+            out[tag] = sorted(set(clean))
+        return out
+
+    if section == "health":
+        out = {}
+        d = DEFAULTS["health"]
+        for key, (label, unit) in HEALTH_LABELS.items():
+            v = value.get(key) or {}
+            cap = Decimal(10000) if unit == "hhi" else Decimal(1)
+            lo = _dec(v.get("low", d[key]["low"]), f"{label} low", Decimal(0), cap)
+            hi = _dec(v.get("high", d[key]["high"]), f"{label} high", Decimal(0), cap)
+            if not lo < hi:
+                raise SettingsError(f"{label}: low must be below high")
+            out[key] = {"low": _s(lo), "high": _s(hi)}
+        mult = _dec((value.get("drift") or {}).get("high_multiple", d["drift"]["high_multiple"]),
+                    "drift HIGH multiple", Decimal(1), Decimal(10))
+        out["drift"] = {"high_multiple": _s(mult)}
+        e = value.get("emergency") or {}
+        mod = _dec(e.get("moderate_below", d["emergency"]["moderate_below"]), "emergency MODERATE below", Decimal(0), Decimal(5))
+        high = _dec(e.get("high_below", d["emergency"]["high_below"]), "emergency HIGH below", Decimal(0), Decimal(5))
+        if not high < mod:
+            raise SettingsError("emergency fund: the HIGH cut-off must be below the MODERATE cut-off")
+        out["emergency"] = {"moderate_below": _s(mod), "high_below": _s(high)}
+        return out
+
     # emergency_fund
     out = {}
     for k in ("monthly_expenses_paise", "balance_paise"):
@@ -162,4 +229,18 @@ def concentration_thresholds(s: Session) -> dict[str, Threshold]:
         o = v.get(key, {})
         out[key] = Threshold(t.key, t.label, Decimal(o.get("low", t.low)), Decimal(o.get("high", t.high)), t.unit,
                              t.explanation)
+    return out
+
+
+def health_thresholds(s: Session) -> dict:
+    """Typed health thresholds (Threshold objects for low/high pairs)."""
+    v = get(s, "health")
+    d = DEFAULTS["health"]
+    out = {}
+    for key, (label, unit) in HEALTH_LABELS.items():
+        x = v.get(key, d[key])
+        out[key] = Threshold(key, label, Decimal(x["low"]), Decimal(x["high"]), unit, "")
+    out["drift_high_multiple"] = Decimal(v.get("drift", d["drift"])["high_multiple"])
+    e = v.get("emergency", d["emergency"])
+    out["emergency"] = (Decimal(e["high_below"]), Decimal(e["moderate_below"]))
     return out
