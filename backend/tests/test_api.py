@@ -95,3 +95,13 @@ def test_simulator_endpoint(client, workbook):
 def test_upload_rejects_non_xlsx(client):
     r = client.post("/api/import", files={"file": ("x.csv", b"a,b", "text/csv")})
     assert r.status_code == 400
+
+
+def test_xirr_endpoint_opening_only(client, workbook):
+    upload(client, workbook)
+    price_everything()
+    x = client.get("/api/xirr").json()
+    assert x["portfolio"]["note"] == "N/A (needs dated transactions)"
+    assert {c["asset_class"] for c in x["asset_classes"]} == {"Mutual funds", "Indian stocks", "International ETFs"}
+    assert all(c["note"] == "N/A (needs dated transactions)" for c in x["asset_classes"])
+    assert len(x["instruments"]) == 19

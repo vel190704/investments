@@ -18,7 +18,7 @@ from app.calc.allocation import (
 from app.calc.concentration import company_concentration
 from app.calc.positions import OversellError, Position, TxnInput, replay
 from app.calc.simulator import SimHolding
-from app.calc.xirr import portfolio_xirr, position_xirr
+from app.calc.xirr import group_xirr, position_xirr
 from app.models import Instrument, PriceQuote
 from app.money import value_paise
 from app.timeutil import as_utc, today_ist
@@ -65,7 +65,7 @@ def load_rows(session: Session) -> tuple[list[HoldingRow], dict]:
             TxnInput(f.as_of_date, "OPENING", f.quantity, f.invested_paise, 0, 0))
     quotes = repo.latest_quotes(session)
     errors = _last_errors(session)
-    rows, closed = [], {"realised_paise": Decimal(0), "dividends_paise": 0}
+    rows, closed = [], {"realised_paise": Decimal(0), "dividends_paise": 0, "positions": []}
     for iid, items in txns.items():
         inst = instruments[iid]
         try:
@@ -76,6 +76,7 @@ def load_rows(session: Session) -> tuple[list[HoldingRow], dict]:
         if not pos.is_open:
             closed["realised_paise"] += pos.realised_paise
             closed["dividends_paise"] += pos.dividends_paise
+            closed["positions"].append((inst, pos))  # still part of class/portfolio XIRR
             continue
         q = quotes.get(iid)
         reason = None
@@ -87,6 +88,40 @@ def load_rows(session: Session) -> tuple[list[HoldingRow], dict]:
         rows.append(HoldingRow(inst, pos, q, reason, asset_class_of(inst.asset_type, inst.exposure)))
     rows.sort(key=lambda r: (-(r.value_paise or 0), r.inst.name))
     return rows, closed
+
+
+def _xirr_items(rows: list[HoldingRow], closed: dict, asset_class: str | None = None):
+    items = [(r.inst.symbol or r.inst.name, r.pos, r.quote.price if r.quote else None)
+             for r in rows if asset_class is None or r.asset_class == asset_class]
+    items += [(i.symbol or i.name, p, None) for i, p in closed["positions"]
+              if asset_class is None or asset_class_of(i.asset_type, i.exposure) == asset_class]
+    return items
+
+
+def _x(res) -> dict:
+    return {"rate": s(Decimal(repr(res.rate)), 6) if res.rate is not None else None, "note": res.note,
+            "flows": res.flows}
+
+
+def xirr_report(session: Session) -> dict:
+    """XIRR per instrument, per asset class and for the whole portfolio (dated rows only)."""
+    rows, closed = load_rows(session)
+    today = today_ist()
+    instruments = [{"instrument_id": r.inst.id, "name": r.inst.name, "short_name": r.inst.symbol or r.inst.name,
+                    "asset_class": r.asset_class, "open": True,
+                    **_x(position_xirr(r.pos, r.quote.price if r.quote else None, today))} for r in rows]
+    instruments += [{"instrument_id": i.id, "name": i.name, "short_name": i.symbol or i.name,
+                     "asset_class": asset_class_of(i.asset_type, i.exposure), "open": False,
+                     **_x(position_xirr(p, None, today))} for i, p in closed["positions"]]
+    classes = sorted({x["asset_class"] for x in instruments}, key=ASSET_CLASS_ORDER.index)
+    return {
+        "valuation_date": today.isoformat(),
+        "method": "Dated BUY/SIP (outflows), SELL and DIVIDEND (inflows) plus today's value of the units bought "
+                  "on those dates. OPENING balances and their units are excluded. Actual/365, Excel-compatible.",
+        "portfolio": _x(group_xirr(_xirr_items(rows, closed), today)),
+        "asset_classes": [{"asset_class": c, **_x(group_xirr(_xirr_items(rows, closed, c), today))} for c in classes],
+        "instruments": instruments,
+    }
 
 
 def _holding_dict(r: HoldingRow, total_value: int, valuation_date: date) -> dict:
@@ -196,7 +231,7 @@ def summary(session: Session) -> dict:
               for r in day_rows)
     prev_val = sum(value_paise(r.pos.quantity, r.quote.previous_close) for r in day_rows)
     today = today_ist()
-    px = portfolio_xirr([(r.pos, r.quote.price if r.quote else None) for r in rows], today)
+    px = group_xirr(_xirr_items(rows, closed), today)
     top = sorted(priced, key=lambda r: -r.value_paise)[:5]
     return {
         "valuation_date": today.isoformat(),
@@ -225,7 +260,7 @@ def summary(session: Session) -> dict:
                           "asset_class": r.asset_class, "value_paise": r.value_paise,
                           "weight": s(Decimal(r.value_paise) / total, 8)} for r in top],
         "concentration_flags": concentration(rows, total)["flags"],
-        "xirr": {"rate": s(Decimal(repr(px.rate)), 6) if px.rate is not None else None, "note": px.note},
+        "xirr": _x(px),
         "data_as_of": _as_of(rows),
     }
 

@@ -4,7 +4,10 @@ from decimal import Decimal as D
 import pytest
 
 from app.calc.positions import TxnInput, replay
-from app.calc.xirr import NA_NEEDS_DATED, portfolio_xirr, position_xirr, xirr
+from app.calc.xirr import (
+    NA_NEEDS_DATED, NA_NO_CONVERGENCE, NA_NO_SIGN_CHANGE, NA_ONE_FLOW, NA_SAME_DAY, group_xirr, portfolio_xirr,
+    position_xirr, solve_xirr, xirr,
+)
 
 
 def test_xirr_matches_excel_reference():
@@ -60,3 +63,67 @@ def test_portfolio_xirr_combines_dated_instruments_only():
     b = replay([TxnInput(date(2025, 1, 1), "OPENING", D(5), 50_000)])
     r = portfolio_xirr([(a, D("112")), (b, D("1"))], date(2026, 1, 1))
     assert r.rate == pytest.approx(0.12, abs=1e-6)
+
+
+# ---- Phase 2: reference values and edge cases
+def test_exact_reference_two_years_ten_percent():
+    # 1000 grows to 1210 over exactly 730 days = 2 × 365 (2021, 2022 not leap) -> exactly 10% p.a.
+    assert xirr([(date(2021, 1, 1), -1000), (date(2023, 1, 1), 1210)]) == pytest.approx(0.10, abs=1e-9)
+
+
+def test_exact_reference_two_contributions():
+    # -1000 at t0, -1000 at t0+365d, value 1000·1.1² + 1000·1.1 = 2310 at t0+730d -> 10%
+    flows = [(date(2021, 1, 1), -1000), (date(2022, 1, 1), -1000), (date(2023, 1, 1), 2310)]
+    assert xirr(flows) == pytest.approx(0.10, abs=1e-9)
+
+
+def test_reference_monthly_sip_matches_npv_zero():
+    from datetime import timedelta
+    d0 = date(2025, 1, 1)
+    flows = [(d0 + timedelta(days=30 * k), -1000) for k in range(12)] + [(date(2026, 1, 1), 12800)]
+    r = xirr(flows)
+    npv = sum(cf / (1 + r) ** ((d - d0).days / 365) for d, cf in flows)
+    assert abs(npv) < 1e-6 and 0.05 < r < 0.20
+
+
+@pytest.mark.parametrize("flows,note", [
+    ([], NA_NEEDS_DATED),
+    ([(date(2024, 1, 1), -100)], NA_ONE_FLOW),
+    ([(date(2024, 1, 1), -100), (date(2024, 1, 1), 120)], NA_SAME_DAY),
+    ([(date(2024, 1, 1), -100), (date(2025, 1, 1), -50)], NA_NO_SIGN_CHANGE),
+    ([(date(2024, 1, 1), 100), (date(2025, 1, 1), 50)], NA_NO_SIGN_CHANGE),
+])
+def test_edge_cases_have_reasons(flows, note):
+    r = solve_xirr(flows)
+    assert r.rate is None and r.note == note
+
+
+def test_non_convergence_reported():
+    # Total loss within a day: the root lies below -99.99% -> outside the solver bracket
+    r = solve_xirr([(date(2024, 1, 1), -1_000_000), (date(2024, 1, 2), 1)])
+    assert r.rate is None and r.note == NA_NO_CONVERGENCE
+
+
+def test_sell_and_dividend_rows_are_cash_flows():
+    p = replay([TxnInput(date(2023, 1, 1), "BUY", D(10), 100_000),
+                TxnInput(date(2024, 1, 1), "DIVIDEND", None, 5_000),
+                TxnInput(date(2024, 1, 1), "SELL", D(10), 105_000)])
+    # -1000 then +50 +1050 a year later -> 10%
+    r = position_xirr(p, None, date(2025, 1, 1))
+    assert r.rate == pytest.approx(0.10, abs=1e-6)
+
+
+def test_dividend_after_full_sale_counts():
+    p = replay([TxnInput(date(2023, 1, 1), "BUY", D(10), 100_000),
+                TxnInput(date(2023, 6, 1), "SELL", D(10), 100_000),
+                TxnInput(date(2023, 7, 1), "DIVIDEND", None, 2_000)])
+    assert p.xirr_flows[-1] == (date(2023, 7, 1), D(2000))
+
+
+def test_group_xirr_includes_closed_positions_and_names_missing_price():
+    closed = replay([TxnInput(date(2025, 1, 1), "BUY", D(1), 100_000), TxnInput(date(2026, 1, 1), "SELL", D(1), 110_000)])
+    open_ = replay([TxnInput(date(2025, 1, 1), "BUY", D(1), 100_000)])
+    r = group_xirr([("A", closed, None), ("B", open_, D("1100"))], date(2026, 1, 1))
+    assert r.rate == pytest.approx(0.10, abs=1e-6)
+    r = group_xirr([("B", open_, None)], date(2026, 1, 1))
+    assert r.rate is None and r.note == "N/A (price unavailable for B)"

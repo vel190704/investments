@@ -42,6 +42,7 @@ class Position:
     opening_quantity: Decimal = ZERO
     dated_quantity: Decimal = ZERO
     has_dated_buys: bool = False
+    last_dated_share: Decimal = ZERO  # dated units / all units, kept for dividends paid after a full sale
     # XIRR flows for the dated (non-OPENING) portion only; terminal value added later.
     xirr_flows: list[tuple[date, Decimal]] = field(default_factory=list)
 
@@ -91,6 +92,7 @@ def replay(txns: list[TxnInput]) -> Position:
             dated_share = pos.dated_quantity / pos.quantity
             pos.dated_quantity -= q * dated_share
             pos.opening_quantity -= q * (1 - dated_share)
+            pos.last_dated_share = dated_share
             pos.quantity -= q
             pos.cost_paise -= cost_removed
             if pos.quantity == 0:
@@ -99,8 +101,9 @@ def replay(txns: list[TxnInput]) -> Position:
                 pos.xirr_flows.append((t.date, proceeds * dated_share))
         elif t.type == "DIVIDEND":
             pos.dividends_paise += t.amount_paise
-            if pos.has_dated_buys and pos.quantity > 0:
-                dated_share = pos.dated_quantity / pos.quantity
+            if pos.has_dated_buys:
+                # a dividend can be paid after the units were sold (record date before the sale)
+                dated_share = pos.dated_quantity / pos.quantity if pos.quantity > 0 else pos.last_dated_share
                 if dated_share > 0:
                     pos.xirr_flows.append((t.date, Decimal(t.amount_paise) * dated_share))
         else:

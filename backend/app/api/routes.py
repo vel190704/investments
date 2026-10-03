@@ -133,6 +133,11 @@ def allocation(session: Session = Depends(get_session)):
     return pf.allocation(session)
 
 
+@router.get("/xirr")
+def xirr(session: Session = Depends(get_session)):
+    return pf.xirr_report(session)
+
+
 @router.get("/plan")
 def plan(session: Session = Depends(get_session)):
     return pf.plan(session)
