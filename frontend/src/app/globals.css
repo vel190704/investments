@@ -45,6 +45,7 @@
   --color-series-2: var(--series-2);
   --color-series-3: var(--series-3);
   --color-series-4: var(--series-4);
+  --color-series-5: var(--series-5);
   --color-status-low: var(--status-low);
   --color-status-moderate: var(--status-moderate);
   --color-status-high: var(--status-high);
@@ -137,6 +138,10 @@
   --series-2: #eb6834;
   --series-3: #1baf7a;
   --series-4: #eda100;
+  --series-5: #e87ba4;
+  --ord-1: #86b6ef;
+  --ord-2: #2a78d6;
+  --ord-3: #184f95;
   --status-low: #0ca30c;
   --status-moderate: #fab219;
   --status-high: #ec835a;
@@ -148,6 +153,11 @@
   --series-2: #d95926;
   --series-3: #199e70;
   --series-4: #c98500;
+  --series-5: #d55181;
+  /* ordinal blue steps (projection scenarios: Conservative < Base < Higher), validated --ordinal */
+  --ord-1: #86b6ef;
+  --ord-2: #3987e5;
+  --ord-3: #1c5cab;
 }
 
 @layer base {

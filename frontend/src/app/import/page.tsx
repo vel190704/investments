@@ -104,7 +104,12 @@ function Report({ r, resolution }: { r: ImportReport; resolution?: string }) {
           <Count label="Skipped" value={t.skipped.length} />
           <Count label="Errors" value={t.errors.length} />
         </div>
-        <p className="text-xs text-muted-foreground">Pruning: {t.pruning}</p>
+        <p className="text-xs text-muted-foreground">Pruning: {t.pruning}. In-app entries are never removed by an import.</p>
+        {t.matched_ui?.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {t.matched_ui.length} row(s) already present as in-app entries (rows {t.matched_ui.map((m) => m.row).join(", ")}): kept once, not duplicated.
+          </p>
+        )}
         {t.skipped.map((s) => <p key={`s${s.row}`} className="text-xs">Skipped row {s.row}: {s.reason}</p>)}
         {t.errors.map((e, i) => (
           <p key={`e${i}`} className="text-xs text-destructive">Error row {e.row}{e.field ? ` [${e.field}]` : ""}: {e.message}</p>

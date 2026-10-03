@@ -10,6 +10,8 @@ export const ASSET_CLASS_COLOR: Record<string, string> = {
   "Indian stocks": "var(--series-2)",
   "International ETFs": "var(--series-3)",
   "Indian ETFs": "var(--series-4)",
+  Gold: "var(--series-4)",
+  "Debt/Cash": "var(--series-5)",
 };
 
 export function AssetDonut({ data }: { data: AssetClass[] }) {

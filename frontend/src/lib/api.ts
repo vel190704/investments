@@ -54,6 +54,8 @@ export type Allocation = {
   instruments: { instrument_id: number; name: string; short_name: string; asset_class: string;
                  value_paise: number; weight: string; display_pct: string }[];
   excluded_unpriced: { name: string; reason: string }[];
+  drift: Drift;
+  not_held: { asset_class: string; text: string }[];
   concentration: {
     scope: string; direct_equity_value_paise: number; total_portfolio_value_paise: number;
     companies: { name: string; value_paise: number; share_of_direct_equity: string; share_of_portfolio: string | null }[];
@@ -79,6 +81,7 @@ export type ImportReport = {
   file: string; ok: boolean; fatal: string[];
   transactions: {
     rows_in_sheet: number; loaded: number; inserted: number; unchanged: number; updated_notes: number;
+    matched_ui: { row: number; message: string }[];
     removed: number; pruning: string; skipped: { row: number; reason: string }[];
     errors: { row: number; field: string | null; message: string }[];
     warnings: { row: number; message: string }[]; by_asset_type: Record<string, number>;
@@ -121,6 +124,108 @@ export type RefreshResult = {
              price?: string; price_date?: string }[];
 };
 
+// ---- Phase 2 types ----
+export type Txn = {
+  id: number; date: string; type: string; instrument_id: number; name: string; symbol: string | null;
+  asset_type: string; quantity: string | null; price: string | null; amount_paise: number; charges_paise: number;
+  platform: string | null; notes: string | null; source: "excel" | "ui"; source_row: number | null;
+};
+export type InstrumentRef = {
+  instrument_id: number; name: string; symbol: string | null; asset_type: string; platform: string | null;
+  scheme_code: string | null;
+};
+export type SeriesPoint = {
+  date: string; value_paise: number; invested_paise: number; invested_priced_paise: number;
+  partial: boolean; unpriced: string[];
+};
+export type Series = { points: SeriesPoint[]; enough_history: boolean; note: string | null };
+export type Snapshot = {
+  snapshot_date: string; total_value_paise: number; total_invested_paise: number; invested_priced_paise: number;
+  partial: boolean; unpriced: string[]; trigger: string; updated_at: string;
+  asset_classes: { asset_class: string; value_paise: number; invested_paise: number }[];
+};
+export type Change = {
+  id: number; occurred_at: string; kind: string; cause: string; instrument_id: number | null;
+  snapshot_date: string | null; summary: string; details: Record<string, unknown>;
+};
+export type CompareRow = {
+  instrument_id: number; name: string; asset_class: string; status: "added" | "removed" | "changed" | "unchanged";
+  quantity_a: string; quantity_b: string; avg_cost_a: string | null; avg_cost_b: string | null;
+  value_a_paise: number | null; value_b_paise: number | null; weight_a: string | null; weight_b: string | null;
+  value_change_paise: number | null;
+};
+export type Compare = {
+  a: string; b: string; label_a: string; label_b: string; total_a_paise: number; total_b_paise: number;
+  total_change_paise: number; instruments: CompareRow[];
+  asset_classes: { asset_class: string; value_a_paise: number; value_b_paise: number; weight_a: string | null;
+                   weight_b: string | null; value_change_paise: number }[];
+};
+export type XirrFull = Xirr & { flows: number };
+export type XirrReport = {
+  valuation_date: string; method: string; portfolio: XirrFull;
+  asset_classes: (XirrFull & { asset_class: string })[];
+  instruments: (XirrFull & { instrument_id: number; name: string; short_name: string; asset_class: string; open: boolean })[];
+};
+export type DriftRow = {
+  asset_class: string; value_paise: number; current: string; target: string; deviation_pp: string;
+  value_vs_target_paise: number; status: "OVERWEIGHT" | "UNDERWEIGHT" | "WITHIN BAND"; held: boolean;
+  reason: string; calculation: string;
+};
+export type Drift = { targets_set: boolean; tolerance_pp: string; rows: DriftRow[]; message: string | null; basis?: string };
+export type SettingsSection<T> = { value: T; is_set: boolean; default: T };
+export type ProjectionCfg = {
+  conservative: string; base: string; higher: string; default_years: number; default_step_up: string; reviewed: boolean;
+};
+export type EmergencyCfg = { monthly_expenses_paise: number; balance_paise: number; target_months: number };
+export type Settings = {
+  target_classes: string[];
+  sections: {
+    targets: SettingsSection<Record<string, string> | null>;
+    drift: SettingsSection<{ tolerance_pp: string }>;
+    concentration: SettingsSection<Record<string, { low: string; high: string }>>;
+    projection: SettingsSection<ProjectionCfg>;
+    emergency_fund: SettingsSection<EmergencyCfg | null>;
+  };
+};
+export type PlanLineOut = {
+  label: string; asset_class: string; instrument_id: number | null; amount_paise: number; invested_paise: number;
+  uninvested_paise: number; units: string | null; whole_units_only: boolean; unit_price: string | null; note?: string;
+};
+export type Consideration = { kind: string; level?: string; title: string; text: string; calculation: string };
+export type PlannerMode = {
+  mode: "plan" | "targets"; label: string; available: boolean; reason?: string; budget_paise?: number;
+  invested_paise?: number; uninvested_paise?: number; total_before_paise?: number; total_after_paise?: number;
+  lines?: PlanLineOut[];
+  asset_classes?: { asset_class: string; held: boolean; current_paise: number; add_paise: number;
+                    projected_paise: number; current: string; projected: string; target: string | null }[];
+  mutual_funds?: { instrument_id: number; name: string; category: string; add_paise: number; current: string; projected: string }[];
+  considerations?: Consideration[];
+};
+export type Planner = {
+  budget_paise: number; default_budget_paise: number; budget_source: string; presets_rupees: number[];
+  assumptions: string[]; excluded: { name: string; reason: string }[]; targets_set: boolean; picks: number[];
+  pickable: { instrument_id: number; short_name: string; name: string; asset_class: string; price: string }[];
+  modes: PlannerMode[];
+};
+export type ProjectionScenario = {
+  name: string; annual_return_pct: string; years: number; step_up_pct: string; start_paise: number; monthly_paise: number;
+  monthly_rate: string; total_contributions_paise: number; growth_paise: number; ending_value_paise: number;
+  growth_share_of_end: string | null; sentence: string;
+  yearly: { year: number; value_paise: number; contributions_paise: number; start_paise: number }[];
+};
+export type Projection = {
+  inputs: { start_paise: number; monthly_paise: number; years: number; step_up_pct: string };
+  defaults: { start_paise: number; start_source: string; start_excludes: string[]; monthly_paise: number;
+              monthly_source: string; years: number; step_up_pct: string };
+  rates_reviewed: boolean; rates_note: string | null; formula: string; closed_form_check_paise: number | null;
+  assumptions: string[]; scenarios: ProjectionScenario[];
+};
+export type EmergencyFund = {
+  is_set: boolean; note: string;
+  status: null | { target_paise: number; balance_paise: number; remaining_paise: number; percent_complete: string | null;
+                   months_covered: string | null; target_months: number; monthly_expenses_paise: number; complete: boolean };
+};
+
 // ---- fetch helpers ----
 export class ApiError extends Error {}
 
@@ -129,7 +234,11 @@ async function handle<T>(res: Response): Promise<T> {
     let msg = `${res.status} ${res.statusText}`;
     try {
       const body = await res.json();
-      if (body?.detail) msg = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      const d = body?.detail;
+      if (typeof d === "string") msg = d;
+      else if (d?.errors) msg = d.errors.map((e: { field?: string; message: string }) =>
+        e.field ? `${e.field}: ${e.message}` : e.message).join("; ");
+      else if (d) msg = JSON.stringify(d);
     } catch { /* not JSON */ }
     throw new ApiError(msg);
   }
@@ -148,6 +257,20 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     init.headers = { "Content-Type": "application/json" };
   }
   return handle<T>(await fetch(`/api${path}`, init));
+}
+
+export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+  return handle<T>(await fetch(`/api${path}`, {
+    method: "PUT", body: JSON.stringify(body), headers: { "Content-Type": "application/json" },
+  }));
+}
+
+export async function apiDelete<T>(path: string): Promise<T> {
+  return handle<T>(await fetch(`/api${path}`, { method: "DELETE" }));
+}
+
+export function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 export function useApi<T>(path: string) {

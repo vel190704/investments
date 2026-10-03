@@ -3,20 +3,22 @@
 import Link from "next/link";
 import { AssetDonut } from "@/components/asset-donut";
 import { EmptyState, ErrorBox, FlagRow, Loading, Notice, PageHeader, Section, SourceNote, Stat } from "@/components/common";
+import { GrowthChart } from "@/components/growth-chart";
 import { RefreshButton } from "@/components/refresh-button";
-import { useApi, type Mappings, type Summary } from "@/lib/api";
+import { useApi, type Mappings, type Series, type Summary } from "@/lib/api";
 import { formatDate, formatINR, formatPct, signClass } from "@/lib/format";
 
 export default function Dashboard() {
   const { data: s, error, loading, reload } = useApi<Summary>("/portfolio/summary");
   const { data: m } = useApi<Mappings>("/mappings");
+  const growth = useApi<Series>("/snapshots/series");
 
   return (
     <>
       <PageHeader
         title="Dashboard"
         subtitle={s ? `Valuation date ${formatDate(s.valuation_date)}` : undefined}
-        actions={<RefreshButton onDone={reload} />}
+        actions={<RefreshButton onDone={() => { reload(); growth.reload(); }} />}
       />
       {error && <ErrorBox message={error} />}
       {loading && !s && <Loading />}
@@ -104,6 +106,15 @@ export default function Dashboard() {
               </table>
             </Section>
           </div>
+
+          <Section title="Growth" aside={<Link className="underline" href="/history">History</Link>}>
+            {growth.data?.enough_history ? <GrowthChart points={growth.data.points} /> : (
+              <p className="text-sm text-muted-foreground">
+                History builds from today: {growth.data?.points.length ?? 0} daily snapshot(s) so far. The chart appears
+                from the second day; earlier history is never estimated.
+              </p>
+            )}
+          </Section>
 
           <Section title="Concentration flags" aside={<Link className="underline" href="/allocation">Details & thresholds</Link>}>
             {s.concentration_flags.length

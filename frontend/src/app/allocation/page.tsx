@@ -3,7 +3,8 @@
 import { AssetDonut, ASSET_CLASS_COLOR } from "@/components/asset-donut";
 import { EmptyState, ErrorBox, FlagRow, Loading, Notice, PageHeader, Section, SourceNote } from "@/components/common";
 import { RefreshButton } from "@/components/refresh-button";
-import { useApi, type Allocation } from "@/lib/api";
+import { DriftSection } from "@/components/drift";
+import { useApi, type Allocation, type XirrReport } from "@/lib/api";
 import { formatINR, formatPct, pctLabel } from "@/lib/format";
 
 function fmtThreshold(v: string, unit: string) {
@@ -12,6 +13,7 @@ function fmtThreshold(v: string, unit: string) {
 
 export default function AllocationPage() {
   const { data: a, error, loading, reload } = useApi<Allocation>("/allocation");
+  const x = useApi<XirrReport>("/xirr");
   const c = a?.concentration;
   const maxW = a ? Math.max(...a.instruments.map((i) => Number(i.weight)), 0) : 0;
 
@@ -55,6 +57,30 @@ export default function AllocationPage() {
               <p className="mt-3 text-xs text-muted-foreground">Bar colour = asset class (same key as the donut).</p>
             </Section>
           </div>
+
+          <Section title="Allocation drift vs your targets" aside={a.drift.targets_set ? `Tolerance ±${a.drift.tolerance_pp} pp` : "Targets not set"}>
+            <DriftSection drift={a.drift} />
+          </Section>
+
+          {x.data && (
+            <Section title="XIRR by asset class" aside="Dated transactions only; OPENING balances excluded">
+              <table className="tnum w-full text-sm">
+                <tbody>
+                  <tr className="border-b border-border font-medium">
+                    <td className="py-1.5">Whole portfolio</td>
+                    <td className="py-1.5 text-right">{x.data.portfolio.rate !== null ? formatPct(x.data.portfolio.rate, 2) : x.data.portfolio.note}</td>
+                  </tr>
+                  {x.data.asset_classes.map((r) => (
+                    <tr key={r.asset_class} className="border-b border-border last:border-0">
+                      <td className="py-1.5">{r.asset_class}</td>
+                      <td className="py-1.5 text-right text-muted-foreground">{r.rate !== null ? formatPct(r.rate, 2) : r.note}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="mt-2 text-xs text-muted-foreground">{x.data.method}</p>
+            </Section>
+          )}
 
           {c && (
             <Section title="Company concentration" aside={c.scope}>
@@ -116,6 +142,18 @@ export default function AllocationPage() {
                 </table>
               </Section>
             </div>
+          )}
+          {a.not_held.length > 0 && (
+            <Section title="Asset classes not held" aside="Information only, not a recommendation">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {a.not_held.map((n) => (
+                  <div key={n.asset_class}>
+                    <div className="mb-1 text-sm font-medium">{n.asset_class}</div>
+                    <p className="text-sm text-muted-foreground">{n.text}</p>
+                  </div>
+                ))}
+              </div>
+            </Section>
           )}
           <SourceNote asOf={a.data_as_of} />
         </div>

@@ -15,7 +15,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="flex min-h-full flex-col md:flex-row">
-        <aside className="border-b border-border p-3 md:sticky md:top-0 md:h-screen md:w-56 md:shrink-0 md:border-r md:border-b-0 md:p-4">
+        <aside className="border-b border-border p-3 md:sticky md:top-0 md:h-screen md:w-56 md:overflow-y-auto md:shrink-0 md:border-r md:border-b-0 md:p-4">
           <div className="mb-3 px-3 text-sm font-semibold md:mb-6">Portfolio Analytics</div>
           <Nav />
         </aside>
