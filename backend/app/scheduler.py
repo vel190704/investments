@@ -13,12 +13,21 @@ log = logging.getLogger(__name__)
 
 
 def _job() -> None:
+    """Daily: refresh prices, then store today's snapshot (refresh_prices takes it)."""
     try:
         with session_scope() as s:
             res = refresh_prices(s, trigger="scheduled")
-        log.info("Scheduled refresh: %s ok, %s errors", res["ok_count"], res["error_count"])
+        log.info("Scheduled refresh: %s ok, %s errors; snapshot %s", res["ok_count"], res["error_count"],
+                 (res.get("snapshot") or {}).get("snapshot_date"))
     except Exception:  # never let the scheduler thread die
         log.exception("Scheduled refresh failed")
+        try:  # still record today's snapshot from cached prices
+            from app.services.snapshots import take_snapshot
+
+            with session_scope() as s:
+                take_snapshot(s, trigger="scheduled")
+        except Exception:
+            log.exception("Scheduled snapshot failed")
 
 
 def start_scheduler() -> BackgroundScheduler | None:

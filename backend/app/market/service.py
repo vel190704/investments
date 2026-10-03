@@ -65,7 +65,14 @@ def refresh_prices(s: Session, trigger: str = "manual", providers: list[PricePro
     run.error_count = len(results) - run.ok_count
     run.finished_at = utcnow()
     s.flush()
-    return {"id": run.id, "ok_count": run.ok_count, "error_count": run.error_count, "results": results,
+    snapshot = None
+    try:
+        from app.services.snapshots import take_snapshot
+
+        snapshot = take_snapshot(s, trigger="scheduled" if trigger == "scheduled" else "refresh")
+    except Exception:  # a snapshot problem must never fail the refresh itself
+        log.exception("Snapshot after refresh failed")
+    return {"id": run.id, "snapshot": snapshot, "ok_count": run.ok_count, "error_count": run.error_count, "results": results,
             "finished_at": run.finished_at.isoformat()}
 
 

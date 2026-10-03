@@ -26,9 +26,28 @@ def _startup_refresh() -> None:
         log.exception("Start-up refresh failed")
 
 
+def ensure_first_snapshot() -> dict | None:
+    """Phase 2: if no snapshot exists yet, store one immediately from cached prices."""
+    from sqlalchemy import func, select
+
+    from app.models import PortfolioSnapshot
+    from app.services.snapshots import take_snapshot
+
+    with session_scope() as s:
+        if s.scalar(select(func.count()).select_from(PortfolioSnapshot)):
+            return None
+        return take_snapshot(s, trigger="startup")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    try:
+        first = ensure_first_snapshot()
+        if first:
+            log.info("Stored first snapshot for %s", first["snapshot_date"])
+    except Exception:
+        log.exception("First snapshot failed")
     sched = None
     if get_settings().scheduler_enabled:
         from app.scheduler import start_scheduler

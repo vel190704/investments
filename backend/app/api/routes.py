@@ -244,3 +244,54 @@ def simulator(req: SimRequest, session: Session = Depends(get_session)):
     result = simulate(hs, amount_paise, [by_key[k] for k in keys])
     result["excluded"] = excluded
     return result
+
+
+# ---------------- snapshots / history / change log
+@router.get("/snapshots")
+def snapshots(session: Session = Depends(get_session)):
+    from app.services.snapshots import list_snapshots, snapshot_dict
+
+    return [snapshot_dict(p) for p in reversed(list_snapshots(session))]
+
+
+@router.post("/snapshots")
+def take_snapshot_now(session: Session = Depends(get_session)):
+    from app.services.snapshots import take_snapshot
+
+    res = take_snapshot(session, trigger="manual")
+    if res is None:
+        raise HTTPException(409, "No holdings yet: import the workbook first")
+    return res
+
+
+@router.get("/snapshots/series")
+def snapshot_series(session: Session = Depends(get_session)):
+    from app.services.snapshots import series
+
+    return series(session)
+
+
+@router.get("/compare")
+def compare_endpoint(a: str, b: str = "live", session: Session = Depends(get_session)):
+    from app.services.snapshots import compare_states
+
+    try:
+        return compare_states(session, a, b)
+    except KeyError as e:
+        raise HTTPException(404, f"No snapshot for {e.args[0]}") from None
+    except ValueError:
+        raise HTTPException(422, "Dates must be YYYY-MM-DD or 'live'") from None
+
+
+@router.get("/changes")
+def changes(limit: int = 200, kind: str | None = None, session: Session = Depends(get_session)):
+    from sqlalchemy import select
+
+    from app.models import ChangeLogEntry
+
+    q = select(ChangeLogEntry).order_by(ChangeLogEntry.occurred_at.desc(), ChangeLogEntry.id.desc()).limit(min(limit, 1000))
+    if kind:
+        q = q.where(ChangeLogEntry.kind == kind)
+    return [{"id": e.id, "occurred_at": as_utc(e.occurred_at).isoformat(), "kind": e.kind, "cause": e.cause,
+             "instrument_id": e.instrument_id, "snapshot_date": e.snapshot_date.isoformat() if e.snapshot_date else None,
+             "summary": e.summary, "details": e.details} for e in session.scalars(q)]
