@@ -35,6 +35,10 @@ def excel_row_keys(s: Session) -> dict[str, Transaction]:
     return {t.row_key: t for t in s.scalars(select(Transaction).where(Transaction.source == "excel"))}
 
 
+def ui_transactions(s: Session) -> list[Transaction]:
+    return list(s.scalars(select(Transaction).where(Transaction.source == "ui")))
+
+
 def instrument_ids_with_transactions(s: Session) -> set[int]:
     return set(s.scalars(select(Transaction.instrument_id).distinct()))
 

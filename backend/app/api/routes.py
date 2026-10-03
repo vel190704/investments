@@ -6,7 +6,7 @@ import tempfile
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -141,11 +141,67 @@ def plan(session: Session = Depends(get_session)):
 @router.get("/transactions")
 def transactions(session: Session = Depends(get_session)):
     inst = {i.id: i for i in repo.all_instruments(session)}
-    return [{"id": t.id, "date": t.date.isoformat(), "type": t.type, "name": inst[t.instrument_id].name,
-             "symbol": inst[t.instrument_id].symbol, "asset_type": inst[t.instrument_id].asset_type,
-             "quantity": pf.s(t.quantity), "price": pf.s(t.price), "amount_paise": t.amount_paise,
-             "charges_paise": t.charges_paise, "platform": t.platform, "notes": t.notes, "source_row": t.source_row}
-            for t in repo.all_transactions(session)]
+    rows = sorted(repo.all_transactions(session), key=lambda t: (t.date, t.id), reverse=True)
+    return [{"id": t.id, "date": t.date.isoformat(), "type": t.type, "instrument_id": t.instrument_id,
+             "name": inst[t.instrument_id].name, "symbol": inst[t.instrument_id].symbol,
+             "asset_type": inst[t.instrument_id].asset_type, "quantity": pf.s(t.quantity), "price": pf.s(t.price),
+             "amount_paise": t.amount_paise, "charges_paise": t.charges_paise, "platform": t.platform,
+             "notes": t.notes, "source": t.source, "source_row": t.source_row} for t in rows]
+
+
+class TxnIn(BaseModel):
+    date: str
+    type: str
+    instrument_id: int | None = None
+    asset_type: str | None = None
+    name: str | None = None
+    symbol: str | None = None
+    quantity: str | None = None
+    price: str | None = None
+    amount: str | None = None
+    charges: str | None = None
+    platform: str | None = None
+    notes: str | None = None
+
+
+@router.post("/transactions", status_code=201)
+def add_transaction(body: TxnIn, session: Session = Depends(get_session)):
+    from app.services.transactions import TxnValidationError, add_ui_transaction
+
+    try:
+        return add_ui_transaction(session, body.model_dump())
+    except TxnValidationError as e:
+        raise HTTPException(422, {"errors": e.errors}) from None
+
+
+@router.delete("/transactions/{txn_id}")
+def delete_transaction(txn_id: int, session: Session = Depends(get_session)):
+    from app.services.transactions import TxnValidationError, delete_ui_transaction
+
+    try:
+        delete_ui_transaction(session, txn_id)
+    except KeyError:
+        raise HTTPException(404, "transaction not found") from None
+    except TxnValidationError as e:
+        raise HTTPException(409, str(e)) from None
+    return {"deleted": txn_id}
+
+
+@router.get("/instruments")
+def instruments(session: Session = Depends(get_session)):
+    return [{"instrument_id": i.id, "name": i.name, "symbol": i.symbol, "asset_type": i.asset_type,
+             "platform": i.platform, "scheme_code": i.scheme_code} for i in repo.all_instruments(session)]
+
+
+@router.get("/export.xlsx")
+def export_xlsx(session: Session = Depends(get_session)):
+    from app.services.export import build_workbook
+    from app.timeutil import today_ist
+
+    name = f"investment_tracker_export_{today_ist().isoformat()}.xlsx"
+    return Response(build_workbook(session),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 # ---------------- simulator

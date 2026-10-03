@@ -11,12 +11,13 @@ import openpyxl
 from sqlalchemy.orm import Session
 
 from app import repository as repo
-from app.calc.allocation import INTERNATIONAL_ETF_SYMBOLS, derive_category
 from app.importer.validate import (
     FALLBACK_REQUIRED, PLAN_REQUIRED, TXN_REQUIRED, ParsedTxn, Problem, header_problems,
     normalise_name, parse_fallback, parse_plan, parse_txn, row_dict,
 )
 from app.models import FallbackHolding, IdentifierCandidate, ImportRun, Instrument, MonthlyPlanItem, Transaction
+from app.services import changelog
+from app.services.instruments import get_or_create
 from app.money import format_inr
 from app.timeutil import utcnow
 from app.types import decimal_to_str
@@ -37,20 +38,35 @@ def _rows(ws) -> tuple[list, list[tuple[int, tuple]]]:
     return header, rows
 
 
-def row_identity(t: ParsedTxn) -> str:
-    parts = [t.date.isoformat(), t.type, t.instrument_key,
-             decimal_to_str(t.quantity) if t.quantity is not None else "",
-             decimal_to_str(t.price) if t.price is not None else "",
-             str(t.amount_paise), str(t.charges_paise), t.platform or ""]
+def identity(d, ttype: str, key: str, quantity, price, amount_paise: int, charges_paise: int,
+             platform: str | None) -> str:
+    """Business identity of a transaction (notes and source excluded)."""
+    parts = [d.isoformat(), ttype, key,
+             decimal_to_str(quantity) if quantity is not None else "",
+             decimal_to_str(price) if price is not None else "",
+             str(amount_paise), str(charges_paise), platform or ""]
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:40]
 
 
-def check_oversell(txns: list[ParsedTxn]) -> tuple[list[ParsedTxn], list[Problem]]:
-    """Drop SELL rows that exceed the quantity held at that point (chronological replay)."""
+def row_identity(t: ParsedTxn) -> str:
+    return identity(t.date, t.type, t.instrument_key, t.quantity, t.price, t.amount_paise, t.charges_paise,
+                    t.platform)
+
+
+def db_identity(t: Transaction) -> str:
+    return identity(t.date, t.type, t.instrument.instrument_key, t.quantity, t.price, t.amount_paise,
+                    t.charges_paise, t.platform)
+
+
+def check_oversell(txns: list[ParsedTxn], context: list[ParsedTxn] = ()) -> tuple[list[ParsedTxn], list[Problem]]:
+    """Drop SELL rows that exceed the quantity held at that point (chronological replay).
+
+    `context` rows (in-app entries already in the DB) take part in the replay but are never dropped.
+    """
     from app.calc.positions import TYPE_ORDER
 
     by_inst: dict[str, list[ParsedTxn]] = defaultdict(list)
-    for t in txns:
+    for t in [*txns, *context]:
         by_inst[t.instrument_key].append(t)
     bad: set[int] = set()
     problems = []
@@ -60,13 +76,26 @@ def check_oversell(txns: list[ParsedTxn]) -> tuple[list[ParsedTxn], list[Problem
             if t.type in ("OPENING", "BUY", "SIP"):
                 held += t.quantity
             elif t.type == "SELL":
-                if t.quantity > held:
+                if t.quantity > held and t.row > 0:
                     bad.add(t.row)
                     problems.append(Problem(t.row, f"SELL of {t.quantity} exceeds quantity held ({held}) on {t.date}",
                                             "quantity"))
                 else:
                     held -= t.quantity
     return [t for t in txns if t.row not in bad], problems
+
+
+def _ui_context(session: Session) -> list[ParsedTxn]:
+    from sqlalchemy import select
+
+    out = []
+    for t in session.scalars(select(Transaction).where(Transaction.source == "ui")):
+        i = t.instrument
+        out.append(ParsedTxn(row=0, date=t.date, type=t.type, asset_type=i.asset_type, name=i.name, symbol=i.symbol,
+                             isin=None, scheme_code=None, quantity=t.quantity, price=t.price,
+                             amount_paise=t.amount_paise, charges_paise=t.charges_paise, platform=t.platform,
+                             notes=None))
+    return out
 
 
 def import_workbook(session: Session, path: str | Path, file_name: str | None = None) -> dict:
@@ -76,7 +105,7 @@ def import_workbook(session: Session, path: str | Path, file_name: str | None = 
     report: dict = {
         "file": file_name, "sha256": hashlib.sha256(data).hexdigest(), "ok": False, "fatal": [],
         "transactions": {"rows_in_sheet": 0, "loaded": 0, "inserted": 0, "unchanged": 0, "updated_notes": 0,
-                         "removed": 0, "pruning": "", "skipped": [], "errors": [], "warnings": [],
+                         "removed": 0, "matched_ui": [], "pruning": "", "skipped": [], "errors": [], "warnings": [],
                          "by_asset_type": {}},
         "holdings_fallback": {"rows": 0, "used": [], "ignored": 0, "skipped": [], "errors": []},
         "monthly_plan": {"rows": 0, "total_paise": 0, "total_row_paise": None, "fraction_sum": "0",
@@ -116,7 +145,7 @@ def import_workbook(session: Session, path: str | Path, file_name: str | None = 
         if t:
             parsed.append(t)
             tr["warnings"] += [{"row": row_no, "message": w} for w in t.warnings]
-    parsed, oversell = check_oversell(parsed)
+    parsed, oversell = check_oversell(parsed, _ui_context(session))
     errors += oversell
 
     # ---- holdings_fallback
@@ -172,17 +201,9 @@ def import_workbook(session: Session, path: str | Path, file_name: str | None = 
 
 def _instrument(session: Session, cache: dict[str, Instrument], report: dict, key: str, asset_type: str,
                 name: str, symbol: str | None, platform: str | None) -> Instrument:
-    inst = cache.get(key)
-    if inst is None:
-        exposure = "INTERNATIONAL" if asset_type == "ETF" and symbol in INTERNATIONAL_ETF_SYMBOLS else "DOMESTIC"
-        inst = Instrument(instrument_key=key, asset_type=asset_type, name=name, symbol=symbol,
-                          platform=platform, exposure=exposure)
-        session.add(inst)
-        session.flush()
-        cache[key] = inst
+    inst, created = get_or_create(session, cache, key, asset_type, name, symbol, platform)
+    if created:
         report["instruments"]["created"].append(name)
-    inst.name, inst.platform = name, platform or inst.platform
-    inst.category = derive_category(asset_type, name, inst.exposure)
     return inst
 
 
@@ -205,6 +226,10 @@ def _sync(session, report, parsed, fallbacks, plans, file_name, has_errors: bool
     cache = repo.instruments_by_key(session)
     existing_count = len(cache)
     existing = repo.excel_row_keys(session)
+    positions_before = changelog.position_states(session)
+    # In-app (ui) rows by identity: an identical Excel row is recognised, not duplicated.
+    ui_pool: Counter = Counter(db_identity(t) for t in repo.ui_transactions(session))
+    added: list[Transaction] = []
     seen: set[str] = set()
     occurrences: Counter = Counter()
     by_type: Counter = Counter()
@@ -226,12 +251,17 @@ def _sync(session, report, parsed, fallbacks, plans, file_name, has_errors: bool
                 row.notes = t.notes
                 tr["updated_notes"] += 1
             row.source_row, row.source_file = t.row, file_name
+        elif ui_pool[ident] > 0:
+            ui_pool[ident] -= 1
+            tr["matched_ui"].append({"row": t.row, "message": "already present as an in-app entry; kept as is"})
         else:
-            session.add(Transaction(
+            row = Transaction(
                 instrument_id=inst.id, date=t.date, type=t.type, quantity=t.quantity, price=t.price,
                 amount_paise=t.amount_paise, charges_paise=t.charges_paise, platform=t.platform, notes=t.notes,
                 source="excel", row_key=key, source_file=file_name, source_row=t.row,
-            ))
+            )
+            session.add(row)
+            added.append(row)
             tr["inserted"] += 1
     tr["loaded"] = len(parsed)
     tr["by_asset_type"] = dict(sorted(by_type.items()))
@@ -242,10 +272,13 @@ def _sync(session, report, parsed, fallbacks, plans, file_name, has_errors: bool
                          "this file were kept" if stale else "skipped (file has row errors)")
     else:
         for row in stale:
+            changelog.record_txn(session, "TXN_REMOVED", "import", row, row.instrument.symbol or row.instrument.name)
             session.delete(row)
         tr["removed"] = len(stale)
         tr["pruning"] = f"removed {len(stale)} previously imported row(s) no longer in the file"
     session.flush()
+    for row in added:
+        changelog.record_txn(session, "TXN_ADDED", "import", row, row.instrument.symbol or row.instrument.name)
 
     # fallback: only for instruments with no transaction rows
     with_txns = repo.instrument_ids_with_transactions(session)
@@ -277,6 +310,7 @@ def _sync(session, report, parsed, fallbacks, plans, file_name, has_errors: bool
         ))
     repo.replace_plan(session, plan_rows)
     report["instruments"]["existing"] = existing_count
+    report["changes_logged"] = changelog.record_position_changes(session, positions_before, "import")
 
 
 def _finish(session: Session, report: dict) -> dict:
@@ -303,6 +337,7 @@ def format_report(report: dict) -> str:
         f"  loaded        : {tr['loaded']}  ({by})",
         f"    new         : {tr['inserted']}",
         f"    unchanged   : {tr['unchanged']}" + (f" (notes updated on {tr['updated_notes']})" if tr["updated_notes"] else ""),
+        f"  in-app dupes  : {len(tr['matched_ui'])} (already entered in the app; not duplicated)",
         f"  skipped       : {len(tr['skipped'])}",
         f"  errors        : {len(tr['errors'])}",
         f"  pruning       : {tr['pruning']}",

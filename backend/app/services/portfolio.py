@@ -16,7 +16,7 @@ from app.calc.allocation import (
     ASSET_CLASS_ORDER, asset_class_of, display_pct, weights,
 )
 from app.calc.concentration import company_concentration
-from app.calc.positions import Position, TxnInput, replay
+from app.calc.positions import OversellError, Position, TxnInput, replay
 from app.calc.simulator import SimHolding
 from app.calc.xirr import portfolio_xirr, position_xirr
 from app.models import Instrument, PriceQuote
@@ -68,7 +68,11 @@ def load_rows(session: Session) -> tuple[list[HoldingRow], dict]:
     rows, closed = [], {"realised_paise": Decimal(0), "dividends_paise": 0}
     for iid, items in txns.items():
         inst = instruments[iid]
-        pos = replay(items)
+        try:
+            pos = replay(items)
+        except OversellError as e:  # inconsistent history must not break every page
+            closed.setdefault("inconsistent", []).append(f"{inst.symbol or inst.name}: {e}")
+            continue
         if not pos.is_open:
             closed["realised_paise"] += pos.realised_paise
             closed["dividends_paise"] += pos.dividends_paise
