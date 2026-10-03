@@ -3,7 +3,8 @@
 Single-user, local-first portfolio analytics and planning tool for an Indian retail investor.
 It **never places orders**. Excel workbook = source of truth for transactions.
 
-Status: Phases 0, 1 and 2 done (§10 describes Phase 2). Phase 3 is next.
+Status: Phases 0–2 done (§10 = Phase 2). Phase 3 (§11) in progress: classification, sectors,
+fundamentals, fund facts, fund look-through and overlap, portfolio health, simulator look-through.
 
 ---
 
@@ -436,3 +437,146 @@ held" panel. The nav is grouped (Overview / Holdings / Analysis / Planning / Dat
 8. XIRR treats a dividend paid after a full sale as an inflow, attributed by the dated share at
    the time of sale.
 9. After an import, an Excel row's `source_row` refers to the most recently imported file.
+
+
+---
+
+## 11. Phase 3 design
+
+### 11.1 Data sources (checked 2026-10-03)
+| need | source | reliability / decision |
+|---|---|---|
+| Stock sector | NSE index constituent CSVs (`ind_niftytotalmarket_list.csv` — 750 stocks, `ind_niftymicrocap250_list.csv`), column **Industry**, keyed by ISIN | Official, the same approach as the ISIN lists. Stocks in neither list are "Unclassified" until a manual sector is set (MOSCHIP today). |
+| ETF asset class / region | NSE `eq_etfseclist.csv`: `ETF Underlying` (EQUITY / COMMODITY / DEBT / GLOBAL INDICES) + `Underlying Key` (GOLD, SILVER, …) + `Underlying Asset` | Official. Region for global indices is a small code map of the index named by NSE (Hang Seng → Hong Kong/China; NYSE FANG+, Nasdaq 100 → US technology-heavy); unknown global index → "International (region not classified)". |
+| MF category | AMFI `NAVAll.txt` section header above the scheme (e.g. "Equity Scheme - Mid Cap Fund") | Parsed reliably. |
+| Expense ratio, exit load, tracking error, tracking difference | AMFI's TER and tracking-error pages are client-rendered (no stable file); `TER.txt` is a 404 | **Manual entry** with a required source note + as-of date; N/A otherwise. No scraping. |
+| Fundamentals | yfinance `Ticker.info`: marketCap, trailingPE, returnOnEquity, debtToEquity (Yahoo gives a percentage: 97.64 = 0.98×), revenueGrowth, earningsGrowth, beta, mostRecentQuarter | Used only when present **and** inside plausibility bounds; otherwise "N/A (not provided by source)" or "N/A (implausible value rejected: …)". |
+| ROCE, promoter holding, alpha | none reliable and free | "N/A (no reliable source)" + manual entry (source note + as-of required, tagged "manual"). |
+| Fund holdings | **Upload** of the AMC monthly portfolio disclosure (xlsx/csv) | Parsers for HDFC, ICICI Prudential and Kotak layouts; an unknown layout fails with a clear error. |
+| Index weights (Nifty 50 / Next 50) | NSE constituent CSVs have **no weights**; weights live in PDF factsheets | **Upload only** (CSV: ISIN, weight). Labelled "approximated from index weights, as of <date>". |
+
+### 11.2 Classification and asset classes
+- New asset classes: **Gold**, **Debt/Cash**, **Other commodities** (silver etc.), alongside
+  Mutual funds, Indian stocks, International ETFs and Indian ETFs.
+- Effective asset class, in order:
+  1. a manual asset-class override (Classification page);
+  2. ETFs by NSE underlying: GOLD → Gold; other COMMODITY → Other commodities;
+     DEBT → Debt/Cash; GLOBAL INDICES → International ETFs; EQUITY → Indian ETFs;
+  3. the Phase 1 rule (MF → Mutual funds, STOCK → Indian stocks, ETF with
+     `exposure=INTERNATIONAL` → International ETFs).
+- Existing data keeps its classes: MAFANG and HNGSNGBEES stay International ETFs through
+  either rule; the migration only adds nullable columns.
+- Drift: Gold and Debt/Cash now carry real values. Indian ETFs fold into Indian stocks;
+  Other commodities has no target class and is listed as "no target" with its weight.
+- Sector, effective in priority order: **manual (app) > Excel `holdings_fallback.sector` >
+  NSE**. Each assignment stores origin, source and as-of; overrides are tagged "manual".
+- Region / geography: India for domestic holdings; for international ETFs the NSE-derived
+  region, which can be overridden manually.
+
+### 11.3 Schema changes (`0003_phase3`)
+| table | change |
+|---|---|
+| `instruments` | + `asset_class_override`, + `etf_underlying` (NSE ETF Underlying), + `etf_underlying_key`, + `region` (nullable) |
+| `sector_assignments` (new) | `instrument_id`, `origin` (NSE / EXCEL / MANUAL), `sector`, `source`, `as_of`, `note`; UNIQUE(instrument_id, origin) |
+| `instrument_facts` (new) | `instrument_id`, `metric`, `origin` (AUTO / MANUAL), `value` (DecimalText, nullable), `value_text`, `source`, `as_of`, `fetched_at`, `note`, `status` (OK / MISSING / REJECTED); UNIQUE(instrument_id, metric, origin) |
+| `fund_disclosures` (new) | `instrument_id` (fund), `kind` (AMC_DISCLOSURE / INDEX_WEIGHTS), `as_of`, `index_name`, `parser`, `source_file`, `file_sha256`, `uploaded_at`, `equity_weight`, `rows`; UNIQUE(instrument_id, kind, as_of) — re-uploading the same month replaces it, earlier months are kept |
+| `disclosure_holdings` (new) | `disclosure_id` (cascade), `isin` (nullable), `name`, `industry`, `weight` (fraction of NAV), `is_equity` |
+
+Settings sections added: `sector_ranges` (desired min/max % per sector, **no defaults**),
+`themes` (user tags → company ISINs, **no defaults**), `health` (thresholds; defaults =
+the values in code).
+
+### 11.4 Fundamentals and fund facts
+- Stocks: price (latest cached quote), market cap, P/E, ROE, D/E, revenue growth, profit
+  growth, beta (yfinance) and ROCE, promoter holding, alpha (manual only).
+- Each value carries its source and as-of: the fetch time, plus "latest reported quarter"
+  when Yahoo gives `mostRecentQuarter`.
+- Plausibility bounds live in `app/calc/fundamentals.py`; a value outside them is rejected and
+  shown as N/A with the reason. Nothing is filled in or estimated.
+- "Within my portfolio" sector median: shown when at least 3 *other* direct holdings in the
+  same sector have that metric, otherwise omitted. Never labelled "industry".
+- Funds: category (AMFI) and expense ratio, exit load, tracking error, tracking difference
+  (manual). Tracking metrics apply only to index funds; other funds show "Not applicable".
+- Manual entries need a value inside the plausibility bounds, a non-empty source note, and an
+  as-of date that is not in the future. They are stored per metric and can be deleted.
+
+### 11.5 Look-through and overlap (`app/calc/lookthrough.py`, pure)
+- Fund holdings come from the newest disclosure per fund; if an AMC disclosure and index
+  weights share an as-of date, the AMC disclosure wins. The label says which, and the as-of.
+- Weights are normalised to fractions: a file whose % column sums to more than 1.5 is in
+  percent.
+- Companies are matched **by ISIN only**:
+  - equity ISINs are `IN?…` with security code `01` at positions 8–9;
+  - a direct stock without a confirmed ISIN cannot be combined, and is listed as such.
+- Exposure per company:
+  - `direct_value + Σ_f fund_value_f × weight_{f,company}`;
+  - shown as direct %, indirect % per fund and total % of total portfolio value.
+- Notable exposure thresholds (in code, shown in the UI, editable in Settings › health):
+  total % of portfolio, LOW < 5%, MODERATE 5–10%, HIGH ≥ 10%.
+- Coverage is stated: the equity weight covered by each disclosure, and funds with no
+  disclosure are listed as "not looked through".
+- Pairwise fund overlap = Σ_isin min(w_A, w_B) over common holdings, with that list.
+- Stale warning when a disclosure's as-of is more than 2 calendar months before today.
+- Sector look-through: a fund holding's sector comes from the NSE classification of its
+  ISIN when available, otherwise the AMC's industry label (marked "AMC label").
+
+### 11.6 AMC parsers (`app/disclosures/`)
+- One shared engine: find the header row (an ISIN column plus a % of NAV column, using the
+  aliases for each AMC), read rows with a valid ISIN or a name, find the as-of date in the top
+  rows ("as on …" in several date formats), and choose the sheet whose title matches the
+  fund.
+- HDFC, ICICI Prudential and Kotak each have their own aliases, sheet rules and AMC
+  detection. A generic CSV layout (`isin, name, weight[, industry]`) serves index weights and
+  hand-made files.
+- Unknown layouts raise `DisclosureFormatError`, which lists the columns looked for and the
+  first rows found. Nothing partial is stored.
+- Tests use small synthetic workbooks built in code (no real downloads).
+
+### 11.7 Portfolio Health (`app/calc/health.py`)
+There is no overall score and no ranking; each dimension stands alone. LOW / MODERATE / HIGH
+appears only where a threshold exists in code:
+| dimension | metric | level |
+|---|---|---|
+| Company concentration (look-through) | largest company total % of portfolio | 5% / 10% |
+| Sector concentration | largest sector % of equity exposure (look-through) + HHI shown | 25% / 40% |
+| Asset allocation drift | largest abs. deviation vs targets | ≤ tolerance LOW, ≤ 2× MODERATE, else HIGH; needs targets |
+| Fund overlap | largest pairwise overlap | 30% / 50% |
+| International exposure | international % of portfolio | information only (no objective threshold) |
+| Liquidity | direct equity vs fund share | information only |
+| Volatility exposure | value-weighted annualised volatility from ≥ 60 stored daily quotes per holding | information only; N/A until enough history |
+| Emergency fund coverage | balance ÷ target | ≥ 100% LOW, 50–100% MODERATE, < 50% HIGH; only if entered |
+
+### 11.8 Simulator upgrade
+Each scenario also reports BEFORE → AFTER **total (direct + indirect) exposure** for the top
+companies and the top sectors, using the same look-through inputs. The wording stays neutral
+("Allocation consideration: LT's total exposure would go from X% to Y%").
+
+### 11.9 Endpoints
+- `GET /classification` · `PUT /instruments/{id}/classification` · `DELETE …/classification/{field}`
+- `POST /sectors/refresh` · `GET /sectors`
+- `GET /fundamentals` · `POST /fundamentals/refresh` · `PUT /facts/{instrument_id}/{metric}` ·
+  `DELETE /facts/{instrument_id}/{metric}`
+- `POST /disclosures` (upload) · `GET /disclosures` · `DELETE /disclosures/{id}`
+- `GET /lookthrough` · `GET /overlap` · `GET /health`
+- the simulator response gains `lookthrough`
+
+### 11.10 Pages
+- `/sectors`: sector table, desired ranges, geography, themes, flags.
+- `/fundamentals`: stocks and fund facts, with manual entry.
+- `/overlap`: upload, look-through table, pairwise overlap, stale warnings.
+- `/health`
+- `/classification`: asset-class, sector and region overrides; linked from Settings.
+- Settings gains sector ranges, themes and the health threshold editor.
+
+### 11.11 Phase 3 assumptions
+1. NSE's index-list "Industry" is the official sector taxonomy used here; it is broad
+   (e.g. "Construction", "Financial Services").
+2. Index weights are an approximation of an index fund's holdings; tracking difference
+   (manual) is shown next to them.
+3. Look-through uses each fund's latest disclosure regardless of age; staleness is flagged,
+   not hidden.
+4. Debt/cash rows inside funds are not companies; they count toward the fund's non-equity
+   weight.
+5. Volatility uses only quotes stored by this app (no downloaded history), so it stays N/A
+   for about the first three months.
+6. "Liquidity" is the simple share split requested, not a market-liquidity measure.
