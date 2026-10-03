@@ -49,6 +49,13 @@ async def upload(file: UploadFile = File(...), resolve: bool = True, session: Se
             session.commit()
         except Exception as e:
             resolution = {"summary": f"Identifier matching skipped: {e}", "errors": [str(e)]}
+        try:
+            from app.services.classification import refresh_classification
+
+            refresh_classification(session)
+            session.commit()
+        except Exception:
+            session.rollback()
     return {"report": report, "text": format_report(report), "resolution": resolution}
 
 
@@ -246,7 +253,9 @@ def simulator(req: SimRequest, session: Session = Depends(get_session)):
     unknown = [k for k in keys if k not in by_key]
     if unknown:
         raise HTTPException(422, f"unknown scenario(s): {', '.join(unknown)}")
-    result = simulate(hs, amount_paise, [by_key[k] for k in keys])
+    from app.services.lookthrough import simulator_context
+
+    result = simulate(hs, amount_paise, [by_key[k] for k in keys], simulator_context(session))
     result["excluded"] = excluded
     return result
 
@@ -391,5 +400,185 @@ def projection(body: ProjectionIn, session: Session = Depends(get_session)):
 @router.get("/emergency-fund")
 def emergency_fund(session: Session = Depends(get_session)):
     from app.services.planning import emergency_fund as run
+
+    return run(session)
+
+
+# ---------------- Phase 3: classification, sectors, fundamentals, disclosures, look-through, health
+@router.get("/classification")
+def classification(session: Session = Depends(get_session)):
+    from app.calc.allocation import OVERRIDABLE_CLASSES
+    from app.services.classification import sectors_by_instrument
+    from app.services.portfolio import inst_class
+
+    secs = sectors_by_instrument(session)
+    return {
+        "asset_classes": OVERRIDABLE_CLASSES,
+        "instruments": [{
+            "instrument_id": i.id, "name": i.name, "symbol": i.symbol, "asset_type": i.asset_type,
+            "asset_class": inst_class(i), "asset_class_override": i.asset_class_override,
+            "etf_underlying": i.etf_underlying, "etf_underlying_key": i.etf_underlying_key, "region": i.region,
+            "sector": secs[i.id].sector, "sector_origin": secs[i.id].origin, "sector_manual": secs[i.id].manual,
+            "sector_source": secs[i.id].source,
+            "sector_as_of": secs[i.id].as_of.isoformat() if secs[i.id].as_of else None,
+        } for i in repo.all_instruments(session)],
+    }
+
+
+class ClassificationIn(BaseModel):
+    sector: str | None = None
+    asset_class: str | None = None
+    region: str | None = None
+    note: str | None = None
+
+
+@router.put("/instruments/{iid}/classification")
+def set_classification(iid: int, body: ClassificationIn, session: Session = Depends(get_session)):
+    from app.services.classification import ClassificationError, set_overrides
+
+    try:
+        set_overrides(session, iid, sector=body.sector, asset_class=body.asset_class, region=body.region, note=body.note)
+    except KeyError:
+        raise HTTPException(404, "instrument not found") from None
+    except ClassificationError as e:
+        raise HTTPException(422, str(e)) from None
+    return {"ok": True}
+
+
+@router.delete("/instruments/{iid}/classification/{field}")
+def clear_classification(iid: int, field: str, session: Session = Depends(get_session)):
+    from app.services.classification import ClassificationError, clear_override
+
+    try:
+        clear_override(session, iid, field)
+    except KeyError:
+        raise HTTPException(404, "instrument not found") from None
+    except ClassificationError as e:
+        raise HTTPException(422, str(e)) from None
+    return {"ok": True}
+
+
+@router.post("/sectors/refresh")
+def sectors_refresh(session: Session = Depends(get_session)):
+    from app.services.classification import refresh_classification
+
+    return refresh_classification(session)
+
+
+@router.get("/sectors")
+def sectors(session: Session = Depends(get_session)):
+    from app.services.lookthrough import sectors_page
+
+    return sectors_page(session)
+
+
+@router.get("/fundamentals")
+def fundamentals(session: Session = Depends(get_session)):
+    from app.services.fundamentals import report
+
+    return report(session)
+
+
+@router.post("/fundamentals/refresh")
+def fundamentals_refresh(session: Session = Depends(get_session)):
+    from app.services.fundamentals import refresh_fundamentals
+
+    return refresh_fundamentals(session)
+
+
+class FactIn(BaseModel):
+    value: str
+    source_note: str
+    as_of: str
+
+
+@router.put("/facts/{iid}/{metric}")
+def put_fact(iid: int, metric: str, body: FactIn, session: Session = Depends(get_session)):
+    from datetime import date as _date
+
+    from app.calc.fundamentals import ManualEntryError
+    from app.services.fundamentals import set_manual
+
+    try:
+        as_of = _date.fromisoformat(body.as_of)
+    except ValueError:
+        raise HTTPException(422, "as_of must be YYYY-MM-DD") from None
+    try:
+        set_manual(session, iid, metric, body.value, body.source_note, as_of)
+    except KeyError:
+        raise HTTPException(404, "instrument not found") from None
+    except ManualEntryError as e:
+        raise HTTPException(422, str(e)) from None
+    return {"ok": True}
+
+
+@router.delete("/facts/{iid}/{metric}")
+def delete_fact(iid: int, metric: str, session: Session = Depends(get_session)):
+    from app.services.fundamentals import delete_manual
+
+    delete_manual(session, iid, metric)
+    return {"ok": True}
+
+
+@router.post("/disclosures")
+async def upload_disclosure(file: UploadFile = File(...), instrument_id: int = 0, kind: str = "AMC_DISCLOSURE",
+                            amc: str | None = None, as_of: str | None = None, index_name: str | None = None,
+                            session: Session = Depends(get_session)):
+    from datetime import date as _date
+
+    from app.disclosures.engine import DisclosureFormatError
+    from app.services.disclosures import upload
+
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "File too large")
+    try:
+        d = _date.fromisoformat(as_of) if as_of else None
+    except ValueError:
+        raise HTTPException(422, "as_of must be YYYY-MM-DD") from None
+    try:
+        return upload(session, data, Path(file.filename or "upload").name, instrument_id, kind, amc or None, d,
+                      index_name)
+    except DisclosureFormatError as e:
+        raise HTTPException(422, str(e)) from None
+
+
+@router.get("/disclosures")
+def disclosures(session: Session = Depends(get_session)):
+    from app.disclosures.engine import LAYOUTS
+    from app.services.disclosures import list_disclosures
+
+    return {"disclosures": list_disclosures(session),
+            "parsers": [{"key": k, "label": l.label} for k, l in LAYOUTS.items()]}
+
+
+@router.delete("/disclosures/{did}")
+def delete_disclosure(did: int, session: Session = Depends(get_session)):
+    from app.services.disclosures import delete
+
+    try:
+        delete(session, did)
+    except KeyError:
+        raise HTTPException(404, "disclosure not found") from None
+    return {"deleted": did}
+
+
+@router.get("/lookthrough")
+def lookthrough(session: Session = Depends(get_session)):
+    from app.services.lookthrough import lookthrough as run
+
+    return run(session)
+
+
+@router.get("/overlap")
+def overlap(session: Session = Depends(get_session)):
+    from app.services.lookthrough import overlap as run
+
+    return run(session)
+
+
+@router.get("/health-check")
+def portfolio_health(session: Session = Depends(get_session)):
+    from app.services.health import health as run
 
     return run(session)

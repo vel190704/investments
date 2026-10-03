@@ -89,3 +89,28 @@ def test_language_is_neutral(book):
 def test_invalid_amount(book):
     with pytest.raises(ValueError):
         simulate(book, 0, [])
+
+
+def test_lookthrough_effects_of_adding_to_a_fund(book):
+    from app.calc.lookthrough import FundRow
+    from app.calc.simulator import LookContext
+
+    LT_ISIN = "INE018A01030"
+    ctx = LookContext(
+        direct_meta={1: (LT_ISIN, "Construction", "STOCK"), 2: ("INE154A01025", "FMCG", "STOCK"),
+                     3: (None, "International equity — US (technology-heavy)", "ETF")},
+        fund_rows={4: [FundRow(LT_ISIN, "Larsen & Toubro", "Construction", D("0.04"), True)]},
+        isin_sector={LT_ISIN: "Construction"},
+    )
+    r = run_scenario(book, 100000, instrument_scenario(book[3]), ctx)  # ₹1,000 into the Nifty 50 fund
+    lt = next(c for c in r["lookthrough"]["companies"] if c["isin"] == LT_ISIN)
+    total_b = sum(h.value_paise for h in book)
+    exp_b = (D(369340) + D(388270) * D("0.04")) / total_b
+    exp_a = (D(369340) + D(488270) * D("0.04")) / (total_b + 100000)
+    one_paisa = D(1) / total_b  # indirect values are rounded to whole paise
+    assert abs(D(lt["before"]) - exp_b) <= one_paisa and abs(D(lt["after"]) - exp_a) <= one_paisa
+    assert D(lt["after"]) < D(lt["before"])  # direct LT is diluted more than the fund adds
+    assert "HDFC Mid Cap" in r["lookthrough"]["funds_without_disclosure"]
+    assert any(t.startswith("Allocation consideration: LT's total exposure (direct + through funds) would go from")
+               for t in r["sentences"])
+    assert "Construction" in {s["name"] for s in r["lookthrough"]["sectors"]}

@@ -116,3 +116,15 @@ def sectors_page(s: Session) -> dict:
         "basis": "% of total portfolio value. Fund holdings are attributed to sectors by ISIN using NSE's "
                  "classification (or the AMC's industry label when the ISIN is not in NSE's lists).",
     }
+
+
+def simulator_context(s: Session):
+    """LookContext for the simulator (look-through effects of a contribution)."""
+    from app.calc.simulator import LookContext
+
+    _, priced, _, direct, funds = inputs(s)
+    return LookContext(
+        direct_meta={d.instrument_id: (d.isin, d.sector, d.asset_type) for d in direct},
+        fund_rows={f.instrument_id: f.rows for f in funds if f.rows},
+        isin_sector=nse_sector_by_isin(s),
+    )

@@ -29,6 +29,10 @@ def main(argv: list[str] | None = None) -> int:
                 res = resolve_identifiers(s)
             print(f"\nIdentifier matching: {res['summary']}")
             print("Review and confirm the proposed matches on the Mappings page (/mappings).")
+            from app.services.classification import refresh_classification
+
+            with session_scope() as s:
+                print(f"Classification: {refresh_classification(s)['summary']}")
         except Exception as e:  # network problems must not fail the import
             print(f"\nIdentifier matching skipped: {e}")
     return 0 if report["ok"] else 1

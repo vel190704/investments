@@ -152,3 +152,40 @@ def test_projection_endpoint_defaults_and_wording(client, workbook):
     r = client.post("/api/projection", json={"years": 5, "step_up": "10", "custom_rate": "7.5", "monthly": "8000"}).json()
     assert [s["name"] for s in r["scenarios"]][-1] == "Custom" and r["inputs"]["step_up_pct"] == "10"
     assert client.post("/api/projection", json={"years": 99}).status_code == 422
+
+
+def test_phase3_endpoints_with_disclosure_upload(client, workbook):
+    from tests import disclosure_fixtures as fx
+
+    upload(client, workbook)
+    price_everything()
+    funds = {i["name"].split(" ")[0]: i["instrument_id"] for i in client.get("/api/instruments").json()
+             if i["asset_type"] == "MF"}
+    # LT needs a confirmed ISIN to be combined with fund holdings
+    with db.session_scope() as s:
+        s.scalar(select(Instrument).where(Instrument.symbol == "LT")).isin = "INE018A01030"
+    r = client.post(f"/api/disclosures?instrument_id={funds['ICICI']}&kind=AMC_DISCLOSURE",
+                    files={"file": ("icici.xlsx", fx.icici(), "application/octet-stream")})
+    assert r.status_code == 200, r.text
+    assert r.json()["parser"] == "ICICI Prudential Mutual Fund" and r.json()["as_of"] == "2026-09-30"
+    bad = client.post(f"/api/disclosures?instrument_id={funds['ICICI']}&kind=AMC_DISCLOSURE",
+                      files={"file": ("x.xlsx", fx.unknown_layout(), "application/octet-stream")})
+    assert bad.status_code == 422 and "Unrecognised layout" in bad.json()["detail"]
+    lk = client.get("/api/lookthrough").json()
+    lt = next(c for c in lk["companies"] if c["isin"] == "INE018A01030")
+    assert lt["direct_paise"] == 369340 and lt["indirect_paise"] > 0 and lt["via"][0]["fund"].startswith("ICICI")
+    assert {f["name"].split(" ")[0] for f in lk["not_looked_through"]} == {"HDFC", "Kotak"}
+    health = client.get("/api/health-check").json()
+    keys = [d["key"] for d in health["dimensions"]]
+    assert keys == ["company", "sector", "drift", "overlap", "international", "liquidity", "volatility", "emergency"]
+    assert "overall" not in json_dumps(health).lower() or "no overall score" in health["note"].lower()
+    sim = client.post("/api/simulator", json={"amount": "1000", "scenario_keys": [f"mf:{funds['ICICI']}"]}).json()
+    assert sim["scenarios"][0]["lookthrough"]["companies"]
+    assert client.get("/api/sectors").json()["geography"]["international_paise"] == 70331
+    assert client.get("/api/fundamentals").status_code == 200
+
+
+def json_dumps(x):
+    import json
+
+    return json.dumps(x)

@@ -12,8 +12,27 @@ from app.market.service import refresh_prices
 log = logging.getLogger(__name__)
 
 
+def _classify_and_fundamentals() -> None:
+    """Daily: classifications (official lists, cached 7 days). Sundays: fundamentals."""
+    from datetime import datetime
+
+    from app.services.classification import refresh_classification
+    from app.services.fundamentals import refresh_fundamentals
+    from app.timeutil import IST
+
+    try:
+        with session_scope() as s:
+            refresh_classification(s)
+        if datetime.now(IST).weekday() == 6:
+            with session_scope() as s:
+                refresh_fundamentals(s)
+    except Exception:
+        log.exception("Classification/fundamentals refresh failed")
+
+
 def _job() -> None:
     """Daily: refresh prices, then store today's snapshot (refresh_prices takes it)."""
+    _classify_and_fundamentals()
     try:
         with session_scope() as s:
             res = refresh_prices(s, trigger="scheduled")

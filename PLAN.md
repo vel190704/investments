@@ -557,7 +557,7 @@ companies and the top sectors, using the same look-through inputs. The wording s
 - `GET /fundamentals` · `POST /fundamentals/refresh` · `PUT /facts/{instrument_id}/{metric}` ·
   `DELETE /facts/{instrument_id}/{metric}`
 - `POST /disclosures` (upload) · `GET /disclosures` · `DELETE /disclosures/{id}`
-- `GET /lookthrough` · `GET /overlap` · `GET /health`
+- `GET /lookthrough` · `GET /overlap` · `GET /health-check` (Portfolio Health; `/health` stays the liveness probe)
 - the simulator response gains `lookthrough`
 
 ### 11.10 Pages
@@ -580,3 +580,8 @@ companies and the top sectors, using the same look-through inputs. The wording s
 5. Volatility uses only quotes stored by this app (no downloaded history), so it stays N/A
    for about the first three months.
 6. "Liquidity" is the simple share split requested, not a market-liquidity measure.
+7. Classifications refresh with the daily job (official lists are cached for 7 days); fundamentals
+   refresh on Sundays and on demand.
+8. The AMC column aliases come from the published column names of each AMC's monthly portfolio
+   file and are verified on synthetic fixtures only. A real file whose headers differ fails with
+   an error that shows the header row it found, so an alias can be added.
