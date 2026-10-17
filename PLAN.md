@@ -597,7 +597,7 @@ companies and the top sectors, using the same look-through inputs. The wording s
 | Company news via **Google News RSS** (requested) | `news.google.com/rss/search` | **robots.txt disallows `/rss` for every user agent** (`Disallow: /` with exceptions only for home/topics/stories). Per the "respect robots/terms" rule the source is implemented but every fetch is refused by the robots guard and the holding shows **"Source unavailable (robots.txt disallows …)"**. It is not worked around. |
 | Exchange announcements | NSE's official RSS feeds on `nsearchives.nseindia.com/content/RSS/` (`Online_announcements.xml`, `Board_Meetings.xml`, `Financial_Results.xml`, `Corporate_action.xml`), published for feed readers; no robots.txt (404 = allowed) | Used. Each item's link starts with the NSE symbol (`LT_17102026…pdf`) → matched by symbol, stored by ISIN. Only a rolling window of recent items is published, so history builds from the first fetch. |
 | BSE announcements | `api.bseindia.com` returns 403 to non-browser clients | Not used ("Source unavailable"); no evasion. |
-| Market news | Publisher RSS feeds whose robots.txt allows the feed URL: ET Markets, Mint Markets, Business Standard Markets, Moneycontrol Business | Default feed list (editable in Settings). Items are matched to holdings by exact company-name phrase or upper-case NSE symbol (≥ 3 letters) in the headline. This is relevance matching for a news feed only; financial calculations still match by ISIN. |
+| Market news | Publisher RSS feeds whose robots.txt allows the feed URL. **Default: ET Markets, Mint Markets.** Business Standard and Moneycontrol answered **HTTP 403 to `robots.txt`** for this tool's identifying User-Agent during the live test (2026-10-17), which the guard treats as "not permitted"; they are not in the defaults and are not worked around (no UA spoofing) | Feed list editable in Settings; the guard reports each feed's status. Items are matched to holdings by exact company-name phrase or upper-case NSE symbol (≥ 3 letters) in the headline. This is relevance matching for a news feed only; financial calculations still match by ISIN. |
 | USD/INR, Brent, Nifty 50 | yfinance `INR=X`, `BZ=F`, `^NSEI` | Automated; source + as-of shown; N/A on failure. |
 | Repo rate, CPI and others | none reliable | **Manual** entry with source note + as-of; N/A otherwise. Never filled from memory. |
 | Groww holdings | Official Groww Trade API: `POST /v1/token/api/access` (`key_type: totp`) → token (expires daily); `GET /v1/holdings/user` (`X-API-VERSION: 1.0`) | Read-only adapter behind `GROWW_ENABLED`; secrets only in `.env`. |
@@ -608,6 +608,8 @@ Polite fetching (`app/net/polite.py`):
 - a robots.txt check per URL, with robots files cached for 24 h;
 - at least 2 s between requests to the same host;
 - feed responses cached for 30 min;
+- after a network failure (e.g. a timeout) the host is skipped for 10 min, so one slow server
+  doesn't stall the whole refresh;
 - no retries on 401/403/429 ("Source unavailable").
 
 ### 12.2 Schema (`0004_phase4`)

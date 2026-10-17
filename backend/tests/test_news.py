@@ -145,3 +145,28 @@ def test_network_failure_degrades_to_source_unavailable(session, workbook):
     rep = ns.refresh_news(session, c, now=NOW)  # must not raise
     assert rep["added"] == 0 and rep["sources"]["NSE"]["errors"]
     assert all(not r.ok for r in session.scalars(select(NewsSourceStatus)))
+
+
+def test_failed_host_is_skipped_for_a_while():
+    calls = []
+    def slow(req):
+        calls.append(str(req.url))
+        raise httpx.ReadTimeout("slow")
+    t = [0.0]
+    c = PoliteClient(transport=httpx.MockTransport(slow), min_interval=0, clock=lambda: t[0])
+    for path in ("a.xml", "b.xml", "c.xml"):
+        with pytest.raises(SourceUnavailable):
+            c.get_text(f"https://slow.example/{path}")
+    assert len(calls) == 1  # robots.txt timed out once; the other feeds on that host were skipped
+    t[0] = 11 * 60
+    with pytest.raises(SourceUnavailable):
+        c.get_text("https://slow.example/d.xml")
+    assert len(calls) == 2  # retried after the cool-down
+
+
+def test_robots_403_means_not_permitted():
+    def h(req):
+        return httpx.Response(403) if req.url.path == "/robots.txt" else httpx.Response(200, text="<rss/>")
+    c = PoliteClient(transport=httpx.MockTransport(h), min_interval=0)
+    with pytest.raises(SourceUnavailable, match="robots.txt"):
+        c.get_text("https://bot-wall.example/rss")

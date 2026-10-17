@@ -21,6 +21,7 @@ USER_AGENT = "personal-portfolio-dashboard/0.4 (single-user, local; respects rob
 MIN_INTERVAL = 2.0
 CACHE_SECONDS = 30 * 60
 ROBOTS_SECONDS = 24 * 3600
+DOWN_SECONDS = 10 * 60  # after a network failure, skip that host for this long (no hammering a slow server)
 
 
 class SourceUnavailable(Exception):
@@ -41,6 +42,7 @@ class PoliteClient:
         self._robots: dict[str, _Cached] = {}
         self._cache: dict[str, _Cached] = {}
         self._last: dict[str, float] = {}
+        self._down: dict[str, tuple[float, str]] = {}
         self._lock = threading.Lock()
         self._min_interval, self._sleep, self._clock = min_interval, sleep, clock
 
@@ -52,8 +54,18 @@ class PoliteClient:
                 self._sleep(self._min_interval - (now - last))
             self._last[host] = self._clock()
 
+    def _check_down(self, host: str) -> None:
+        d = self._down.get(host)
+        if d and self._clock() - d[0] < DOWN_SECONDS:
+            raise SourceUnavailable(d[1] + " (skipped: host failed recently)")
+
+    def _mark_down(self, host: str, message: str) -> SourceUnavailable:
+        self._down[host] = (self._clock(), message)
+        return SourceUnavailable(message)
+
     def allowed(self, url: str) -> tuple[bool, str]:
         parts = urlsplit(url)
+        self._check_down(parts.netloc)
         base = f"{parts.scheme}://{parts.netloc}"
         c = self._robots.get(base)
         if c is None or self._clock() - c.at > ROBOTS_SECONDS:
@@ -62,9 +74,9 @@ class PoliteClient:
             try:
                 r = self._client.get(base + "/robots.txt")
             except httpx.HTTPError as e:
-                raise SourceUnavailable(f"Source unavailable ({parts.netloc}: {type(e).__name__})") from None
+                raise self._mark_down(parts.netloc, f"Source unavailable ({parts.netloc}: {type(e).__name__})") from None
             if r.status_code in (401, 403):
-                rp.disallow_all = True  # robots.txt itself is refused -> treat as not permitted
+                rp.disallow_all = True  # robots.txt itself is refused to an identified client -> not permitted
             elif r.status_code >= 400:
                 rp.allow_all = True  # no robots.txt -> allowed
             else:
@@ -86,7 +98,7 @@ class PoliteClient:
         try:
             r = self._client.get(url)
         except httpx.HTTPError as e:
-            raise SourceUnavailable(f"Source unavailable ({host}: {type(e).__name__})") from None
+            raise self._mark_down(host, f"Source unavailable ({host}: {type(e).__name__})") from None
         if r.status_code in (401, 403, 429):
             raise SourceUnavailable(f"Source unavailable ({host} answered HTTP {r.status_code}; not retried)")
         if r.status_code >= 400:

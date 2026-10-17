@@ -22,8 +22,6 @@ NSE_FEEDS = {
 DEFAULT_PUBLISHER_FEEDS = [
     {"name": "ET Markets", "url": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"},
     {"name": "Mint Markets", "url": "https://www.livemint.com/rss/markets"},
-    {"name": "Business Standard Markets", "url": "https://www.business-standard.com/rss/markets-106.rss"},
-    {"name": "Moneycontrol Business", "url": "https://www.moneycontrol.com/rss/business.xml"},
 ]
 
 

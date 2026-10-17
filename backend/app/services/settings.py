@@ -43,8 +43,6 @@ DEFAULTS.update({
     "news": {"feeds": [
         {"name": "ET Markets", "url": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"},
         {"name": "Mint Markets", "url": "https://www.livemint.com/rss/markets"},
-        {"name": "Business Standard Markets", "url": "https://www.business-standard.com/rss/markets-106.rss"},
-        {"name": "Moneycontrol Business", "url": "https://www.moneycontrol.com/rss/business.xml"},
     ]},
     "alerts": {"announcement": True, "announcement_categories": [
         "results", "order win / contract", "dividend", "board meeting", "acquisition / merger", "regulatory / legal",
