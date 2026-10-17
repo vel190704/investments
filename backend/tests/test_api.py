@@ -218,7 +218,6 @@ def test_phase4_endpoints_degrade_without_network_or_key(client, workbook, monke
     assert client.post(f"/api/analysis/{lt['instrument_id']}").status_code == 409
     prev = client.get(f"/api/analysis/{lt['instrument_id']}/preview").json()
     assert "₹" not in json_dumps(prev["input"]) and prev["system"].startswith("You write scenario")
-    assert client.get("/api/reconcile").json()["ok"] is False  # flag off: app works as before
     assert client.get("/api/alerts").status_code == 200 and client.post("/api/alerts/evaluate").status_code == 200
     j = client.post(f"/api/journal/{lt['instrument_id']}", json={"why": "w", "change_view": "c", "horizon": "5y",
                                                                    "review_date": "2026-01-01"})

@@ -53,7 +53,7 @@ check:
 	cd backend && .venv/bin/python -m pytest -q -p no:warnings
 	cd frontend && npm test
 	cd frontend && npm run lint
-	cd frontend && npx tsc --noEmit
+	cd frontend && rm -rf .next/dev/types .next/types && npx next typegen >/dev/null && npx tsc --noEmit
 	@echo "make check: all passed"
 
 hooks:

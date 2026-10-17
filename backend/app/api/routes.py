@@ -584,7 +584,7 @@ def portfolio_health(session: Session = Depends(get_session)):
     return run(session)
 
 
-# ---------------- Phase 4: news, macro, AI analysis, journal, broker, alerts
+# ---------------- Phase 4: news, macro, AI analysis, journal, alerts
 @router.get("/news")
 def news_feed(isin: str | None = None, category: str | None = None, days: int = 30,
               session: Session = Depends(get_session)):
@@ -805,41 +805,6 @@ def strategy_view(since: str, session: Session = Depends(get_session)):
     except ValueError:
         raise HTTPException(422, "since must be YYYY-MM-DD") from None
     return strategy(session, d)
-
-
-@router.get("/broker/status")
-def broker_status():
-    from app.services.broker import status
-
-    return status()
-
-
-class TotpIn(BaseModel):
-    totp: str | None = None
-
-
-@router.post("/broker/groww/token")
-def broker_token(body: TotpIn):
-    from app.brokers.base import BrokerError
-    from app.services.broker import groww_adapter
-
-    try:
-        exp = groww_adapter().login(body.totp or None)
-    except BrokerError as e:
-        raise HTTPException(409, str(e)) from None
-    return {"ok": True, "expiry": exp.isoformat() if exp else None}
-
-
-@router.get("/reconcile")
-def reconcile_view(session: Session = Depends(get_session)):
-    from app.brokers.base import BrokerError
-    from app.services.broker import groww_adapter, reconcile_with
-
-    try:
-        adapter = groww_adapter()
-    except BrokerError as e:
-        return {"ok": False, "error": str(e), "differences": [], "not_compared": []}
-    return reconcile_with(session, adapter)
 
 
 @router.get("/alerts")

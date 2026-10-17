@@ -108,5 +108,5 @@ def test_transaction_source_check_constraint(session, workbook):
 
     import_workbook(session, workbook)
     with pytest.raises(IntegrityError):
-        session.execute(text("UPDATE transactions SET source = 'broker'"))
+        session.execute(text("UPDATE transactions SET source = 'nonsense'"))
         session.flush()

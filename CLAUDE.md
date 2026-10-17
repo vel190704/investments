@@ -91,9 +91,6 @@ It never places orders. See PLAN.md for the design and README.md for usage.
 - LLM output must pass `app/llm/validate.py` (no invented numbers, no recommendation/prediction
   wording, citations to input ids, schema); failures are flagged, never shown as analysis.
   Bump `PROMPT_VERSION` when the prompt or schema changes.
-- Broker adapters are read-only: no order/modify/cancel methods, and the Groww HTTP layer
-  allow-lists only the token and holdings endpoints (tested). Reconciliation never writes;
-  the user confirms an in-app transaction.
 - The thesis journal is append-only (no update/delete paths).
 
 ## Settings

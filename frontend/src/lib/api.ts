@@ -355,11 +355,6 @@ export type JournalPage = {
   review_due: (ThesisEntry & { name: string })[]; note: string;
 };
 export type AlertItem = { id: number; rule: string; title: string; detail: string; instrument_id: number | null; created_at: string; read: boolean };
-export type ReconcileRow = {
-  isin: string; name: string; instrument_id?: number; kind: string; broker_quantity: string; db_quantity: string;
-  broker_avg_price: string | null; db_avg_cost: string | null;
-  suggested: { type: string; quantity: string; price: string | null } | null;
-};
 
 // ---- fetch helpers ----
 export class ApiError extends Error {}

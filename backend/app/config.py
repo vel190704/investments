@@ -20,9 +20,7 @@ class Settings(BaseSettings):
     http_timeout_seconds: float = 30.0
     # Secrets: only from .env / environment. Never stored in the DB, returned by the API or logged.
     anthropic_api_key: str = ""
-    groww_enabled: bool = False
-    groww_api_key: str = ""
-    groww_totp_secret: str = ""
+    claude_model: str = ""  # default LLM model (Settings can override)
 
     @property
     def resolved_database_url(self) -> str:

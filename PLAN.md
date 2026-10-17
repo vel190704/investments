@@ -63,8 +63,8 @@ Phase 2+ tables (designed, **not** created now): `portfolio_snapshots` (date, to
 JSON), `change_log`, `emergency_fund`, `projection_scenarios`; Phase 3 `fundamentals`
 (value + source + as_of, nullable), `index_constituents`, `fund_portfolio_disclosures`;
 Phase 4 `news_items`, `ai_analyses` (input_hash UNIQUE, provider, JSON in/out), `thesis_notes`,
-`broker_holdings` (normalised, keyed by ISIN). The ISIN/scheme_code mapping built now is what
-lets broker adapters and overlap analysis join later.
+(account-linking ideas were dropped in Phase 5). The ISIN/scheme_code mapping built now is what
+lets overlap analysis join later.
 
 Migrations: Phase 1 uses `metadata.create_all`. Alembic is introduced at the start of Phase 2,
 before the first schema change to an existing table.
@@ -239,7 +239,7 @@ disclaimer on every page.
 - **Phase 3**: sector exposure, fundamentals (N/A without a reliable source), MF-vs-direct
   overlap from AMC disclosures / index weights, portfolio-health flags.
 - **Phase 4**: news/announcements, AI scenario analysis (LLM behind an interface, JSON in/out,
-  cached by input hash), thesis journal, read-only `BrokerAdapter`s (Groww, Kite) returning
+  cached by input hash), thesis journal (account-linking adapters were built in Phase 4 and removed in Phase 5;
   holdings keyed by ISIN.
 
 
@@ -600,7 +600,6 @@ companies and the top sectors, using the same look-through inputs. The wording s
 | Market news | Publisher RSS feeds whose robots.txt allows the feed URL. **Default: ET Markets, Mint Markets.** Business Standard and Moneycontrol answered **HTTP 403 to `robots.txt`** for this tool's identifying User-Agent during the live test (2026-10-17), which the guard treats as "not permitted"; they are not in the defaults and are not worked around (no UA spoofing) | Feed list editable in Settings; the guard reports each feed's status. Items are matched to holdings by exact company-name phrase or upper-case NSE symbol (≥ 3 letters) in the headline. This is relevance matching for a news feed only; financial calculations still match by ISIN. |
 | USD/INR, Brent, Nifty 50 | yfinance `INR=X`, `BZ=F`, `^NSEI` | Automated; source + as-of shown; N/A on failure. |
 | Repo rate, CPI and others | none reliable | **Manual** entry with source note + as-of; N/A otherwise. Never filled from memory. |
-| Groww holdings | Official Groww Trade API: `POST /v1/token/api/access` (`key_type: totp`) → token (expires daily); `GET /v1/holdings/user` (`X-API-VERSION: 1.0`) | Read-only adapter behind `GROWW_ENABLED`; secrets only in `.env`. |
 | LLM | Anthropic Messages API (`anthropic` SDK), default model `claude-opus-5-5`, structured outputs (`output_config.format` JSON schema), server-side refusal fallbacks (`fallbacks: "default"`) | Off unless an API key is set **and** the privacy toggle allows outbound calls. |
 
 Polite fetching (`app/net/polite.py`):
@@ -736,24 +735,8 @@ The API key and Groww secrets live only in `.env`; they are never in the DB, the
   - the snapshot on/after `since` vs today (compare);
   - transactions and change-log entries since that date.
 
-### 12.7 Broker adapters (`app/brokers/`)
-- `BrokerAdapter` protocol: `name`, `holdings() -> list[BrokerHolding(isin, symbol, quantity,
-  avg_price)]`. There are no order methods; a test inspects the class and asserts no
-  order/modify/cancel/place attribute exists.
-- `FakeAdapter`, for tests.
-- `GrowwAdapter`, behind `GROWW_ENABLED=true`:
-  - its HTTP layer allow-lists exactly `POST /v1/token/api/access` and
-    `GET /v1/holdings/user`; any other path raises before sending (tested with a mock
-    transport that records requests);
-  - TOTP comes from `GROWW_TOTP_SECRET` (RFC 6238, stdlib, tested on RFC vectors) or a code
-    typed in the UI, which is used once and not stored;
-  - the token is kept in memory until its expiry and never logged.
-- `KiteMFAdapter`: a documented stub that raises NotImplementedError.
-- Reconciliation (pure): Groww-platform stocks/ETFs vs broker holdings by ISIN.
-  - Rows: missing in DB, missing at broker, quantity differs, average price differs
-    (> 0.5%). Differences only.
-  - "Add as transaction" opens a pre-filled in-app transaction form the user must confirm.
-    Nothing is written automatically.
+### 12.7 (removed in Phase 5)
+Excel is the only input for holdings and transactions; see §13.1.
 
 ### 12.8 Alerts (in-app)
 Each rule is a toggle in Settings, and each alert is created once per dedupe key:
@@ -770,12 +753,11 @@ Alerts are evaluated after news refresh, price refresh and on page load. Mark-as
 - Sensitivity: `GET /sensitivities` · `PUT /sensitivities/{sector}` · `GET /scenarios`
 - Analysis: `GET /analysis` · `POST /analysis/{iid}` (`?refresh=true`) · `GET /analysis/{iid}/preview` (input that would be sent, without calling) · `GET /llm/status`
 - Journal: `GET /journal` · `POST /journal/{iid}` · `PUT /journal/{iid}/optin` · `GET /journal/review-due` · `GET /strategy?since=`
-- Broker: `GET /broker/status` · `POST /broker/groww/token` · `GET /reconcile`
 - Alerts: `GET /alerts` · `POST /alerts/evaluate` · `POST /alerts/{id}/read`
 
 ### 12.10 Pages
 `/news`, `/macro` (snapshot, sensitivity table, exposure by tag), `/analysis`, `/journal`,
-`/strategy`, `/reconcile`, `/alerts`; dashboard widget; Settings gains LLM, news feeds and
+`/strategy`, `/alerts`; dashboard widget; Settings gains LLM, news feeds and
 alert rules. Analysis pages carry the footer "Scenario and context analysis, not a prediction
 or investment advice."
 
@@ -789,7 +771,6 @@ or investment advice."
    set a key.
 5. Refusal fallbacks (`fallbacks: "default"`) are enabled on LLM calls, so a safety decline is
    retried on Anthropic's recommended fallback model; the card shows the model that served it.
-6. Reconciliation covers Groww stocks/ETFs only (Coin mutual funds have no adapter).
 7. One news URL is stored once; if a headline names two holdings it is filed under the one with
    the larger exposure.
 8. NSE's RSS host timed out during the live test (2026-10-17); it degrades to "Source
@@ -822,8 +803,7 @@ never connects to a trading account.** The AI works only from what is imported a
     when they differ.
 
 ### 13.1 Excel-only workflow
-- The read-only account adapters, reconciliation page, feature flag, env vars, tests and docs
-  are deleted. Phase 4 created no tables for them, so the migration has nothing to drop
+- The Phase 4 account-linking code, its page, feature flag, env vars, tests and docs are deleted. Phase 4 created no tables for them, so the migration has nothing to drop
   (stated, not invented).
 - **Import preview (dry run):**
   - `POST /import/preview` saves the upload under `data/cache/import-preview/<sha256>.xlsx` and
@@ -959,7 +939,7 @@ manual override needs a source note and an as-of date.
 - Pages: `/monthly`, `/valuation`, `/sources`; Import gains preview/confirm; Journal gains
   qualitative notes; AI analysis gains fund cards and the portfolio summary; Settings gains the
   rubric, sector rules and the LLM model/prices/fallback.
-- Removed: the reconcile page and nav entry.
+- Removed: the Phase 4 account-linking page and nav entry.
 
 ### 13.9 Phase 5 assumptions
 1. "Earnings growth percentage" for PEG = yfinance `earningsGrowth` (latest quarter, YoY) ×

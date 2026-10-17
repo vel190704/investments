@@ -16,7 +16,6 @@ Phase 4 adds:
 - a macro snapshot and exposure by sensitivity tag;
 - optional AI scenario analysis with strict guardrails;
 - a thesis journal;
-- read-only Groww reconciliation;
 - in-app alerts.
 
 It **never places orders**, has no login, and binds only to `127.0.0.1`.
@@ -97,7 +96,6 @@ make migrate        # apply migrations now (backs up first)
 | Macro & scenarios | USD/INR, Brent, Nifty 50 (automated); repo rate, CPI (manual); sector sensitivity tags; exposure by tag |
 | AI analysis | per-stock scenario/context cards (optional, guardrailed, cached), with "View exactly what was sent" |
 | Thesis journal / Strategy vs actual | append-only theses with review dates; stated targets/theses next to what changed |
-| Broker reconcile | read-only Groww holdings vs your records by ISIN (differences only) |
 | Alerts | in-app alerts from rules you toggle in Settings |
 | Import / Mappings / Settings | data management |
 
@@ -284,23 +282,6 @@ Every answer is validated before display. It is rejected if it:
 A rejected answer is retried once with the reasons; if it fails again it is flagged and not
 shown. Calls use Anthropic's server-side refusal fallback (`fallbacks: "default"`); the card
 shows which model served it.
-
-## Groww reconciliation (optional, read-only)
-
-1. In `.env`:
-   - `GROWW_ENABLED=true`;
-   - `GROWW_API_KEY` — an API key from the Groww Cloud API keys page, approved daily there;
-   - optionally `GROWW_TOTP_SECRET` — the base32 secret behind your authenticator, used to
-     generate the code locally.
-2. Restart the backend and open **Broker reconcile**. Click **Connect** once a day (enter the
-   6-digit code if you didn't set a secret). The daily token is kept in memory only.
-3. The page lists differences by ISIN (quantity, or average price > 0.5%). **Add as
-   transaction** opens a pre-filled form you review; nothing is written until you confirm, and
-   the result is an in-app (`ui`) entry you can delete.
-
-The adapter can only call `POST /v1/token/api/access` and `GET /v1/holdings/user`; any other
-path is blocked before sending (tested). There are no order methods. Zerodha Coin (Kite MF)
-is a documented stub. With `GROWW_ENABLED` unset, the app behaves exactly as before.
 
 ## Data sources
 
