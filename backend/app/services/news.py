@@ -61,10 +61,15 @@ def tracked_companies(s: Session) -> tuple[list[Tracked], list[dict], list[dict]
         out[r.inst.isin] = Tracked(r.inst.isin, r.inst.name, r.inst.symbol, r.inst.id,
                                    float(e["total_pct"]) if e and e["total_pct"] else 0.0)
     fund_notes = []
-    for f in funds:
-        if not f.rows:
-            fund_notes.append({"fund": f.name, "companies": [], "note": "No holdings disclosure uploaded — fund news is "
-                                                                         "not shown (only news for its holdings would be)."})
+    looked = {f.instrument_id: f for f in funds}
+    for r in rows:  # every fund held, priced or not
+        if r.inst.asset_type != "MF":
+            continue
+        f = looked.get(r.inst.id)
+        if f is None or not f.rows:
+            fund_notes.append({"fund": r.inst.name, "companies": [],
+                               "note": "No holdings disclosure uploaded (or no NAV yet) — fund news is not shown; only "
+                                       "news for its top holdings would be."})
             continue
         top = sorted([c for c in exposure.values() if any(v["instrument_id"] == f.instrument_id for v in c["via"])],
                      key=lambda c: -c["total_paise"])[:FUND_TOP_N]
