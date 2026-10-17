@@ -1,0 +1,32 @@
+Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;Net Asset Value;Date
+
+
+Open Ended Schemes(Equity Scheme - Mid Cap Fund)
+
+HDFC Mutual Fund
+118989;INF179K01XQ0;-;HDFC Mid Cap Fund;Direct Plan;Growth Option;221.058;16-Oct-2026
+
+Open Ended Schemes(Equity Scheme - Mid Cap Fund)
+
+HDFC Mutual Fund
+105758;INF179K01CR2;-;HDFC Mid Cap Fund;Regular Plan;Growth Option;199.232;16-Oct-2026
+
+Open Ended Schemes(Other Scheme - Index Funds)
+
+ICICI Prudential Mutual Fund
+101349;INF109K01PI0;-;ICICI Prudential Nifty 50 Index Fund;Regular Plan;Cumulative;234.6162;16-Oct-2026
+
+Open Ended Schemes(Other Scheme - Index Funds)
+
+ICICI Prudential Mutual Fund
+120620;INF109K012M7;-;ICICI Prudential Nifty 50 Index Fund;Direct Plan;Cumulative;245.0282;16-Oct-2026
+
+Open Ended Schemes(Other Scheme - Index Funds)
+
+Kotak Mahindra Mutual Fund
+148978;INF174KA1HA7;-;Kotak Nifty 50 Index Fund;Direct Plan;Growth;15.4;16-Oct-2026
+
+Open Ended Schemes(Other Scheme - Index Funds)
+
+Kotak Mahindra Mutual Fund
+148745;INF174KA1GA9;-;Kotak Nifty Next 50 Index Fund;Direct Plan;Growth;20.2526;16-Oct-2026

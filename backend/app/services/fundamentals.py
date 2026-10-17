@@ -35,7 +35,34 @@ def _upsert(s: Session, iid: int, metric: str, origin: str) -> InstrumentFact:
     return f
 
 
-def refresh_fundamentals(s: Session, fetch=yfinance_info) -> dict:
+def refresh_fundamentals(s: Session, fetch=None, statements=None) -> dict:
+    """Ticker.info metrics (plausibility-checked) + statement-based metrics (PEG, P/S, FCF, coverage)."""
+    from app.services import valuation as val
+
+    if statements is False:  # Ticker.info only (used by older tests)
+        return _refresh_info(s, fetch or yfinance_info)
+    rep = val.refresh(s, fetch=statements or val.fetch_payload, peers=False)  # one fetch per stock covers both
+    return {"ok": rep["own"], "errors": rep["errors"],
+            "summary": f"{len(rep['own'])} stocks refreshed" + (f", {len(rep['errors'])} failed" if rep["errors"] else "")}
+
+
+def apply_info(s: Session, iid: int, info: dict) -> None:
+    """Store every Ticker.info-based metric (plausibility-checked) as an AUTO fact."""
+    mrq = info.get("mostRecentQuarter")
+    quarter = datetime.fromtimestamp(mrq, UTC).date() if isinstance(mrq, (int, float)) else None
+    for m in METRICS.values():
+        if m.applies_to != "STOCK" or not m.auto_field:
+            continue
+        status, value, note = check_auto(m.key, info.get(m.auto_field))
+        f = _upsert(s, iid, m.key, "AUTO")
+        f.status, f.value, f.value_text, f.note = status, value, None, note
+        f.source = f"{SOURCE}: {m.auto_field}"
+        f.fetched_at = utcnow()
+        financial = m.key in ("roe", "debt_to_equity", "revenue_growth", "profit_growth")
+        f.as_of = quarter if (financial and quarter) else today_ist()
+
+
+def _refresh_info(s: Session, fetch) -> dict:
     report = {"ok": [], "errors": []}
     for inst in repo.all_instruments(s):
         if inst.asset_type != "STOCK" or not inst.symbol:
@@ -45,18 +72,7 @@ def refresh_fundamentals(s: Session, fetch=yfinance_info) -> dict:
         except Exception as e:
             report["errors"].append(f"{inst.symbol}: {type(e).__name__}: {e}")
             continue
-        mrq = info.get("mostRecentQuarter")
-        quarter = datetime.fromtimestamp(mrq, UTC).date() if isinstance(mrq, (int, float)) else None
-        for m in METRICS.values():
-            if m.applies_to != "STOCK" or not m.auto_field:
-                continue
-            status, value, note = check_auto(m.key, info.get(m.auto_field))
-            f = _upsert(s, inst.id, m.key, "AUTO")
-            f.status, f.value, f.value_text, f.note = status, value, None, note
-            f.source = f"{SOURCE}: {m.auto_field}"
-            f.fetched_at = utcnow()
-            financial = m.key in ("roe", "debt_to_equity", "revenue_growth", "profit_growth")
-            f.as_of = quarter if (financial and quarter) else today_ist()
+        apply_info(s, inst.id, info)
         report["ok"].append(inst.symbol)
     s.flush()
     report["summary"] = f"{len(report['ok'])} stocks refreshed" + (f", {len(report['errors'])} failed" if report["errors"] else "")
@@ -93,11 +109,11 @@ def _cell(m, auto: InstrumentFact | None, manual: InstrumentFact | None, not_app
         return {**base, "value": None, "text": None, "display_na": not_applicable, "origin": None}
     f = manual or auto
     if f is None or f.status != "OK":
-        if m.manual and manual is None:
+        if f is None and m.manual and not m.auto_field and not m.computed:
             na = NO_RELIABLE_SOURCE
         elif f is None:
             na = "N/A (not fetched yet)"
-        elif f.status == "REJECTED":
+        elif f.status == "REJECTED" or (m.computed and f.note):
             na = f"N/A ({f.note})"
         else:
             na = NOT_PROVIDED
@@ -106,7 +122,7 @@ def _cell(m, auto: InstrumentFact | None, manual: InstrumentFact | None, not_app
     return {**base, "value": str(f.value) if f.value is not None else None, "text": f.value_text,
             "display_na": None, "origin": f.origin, "manual": f.origin == "MANUAL", "source": f.source,
             "as_of": f.as_of.isoformat() if f.as_of else None, "fetched_at": as_utc(f.fetched_at).isoformat(),
-            "note": m.note or None}
+            "note": m.note or None, "derivation": f.note if (m.computed and f.origin == "AUTO") else None}
 
 
 def report(s: Session) -> dict:

@@ -24,6 +24,7 @@ class Metric:
     auto_scale: Decimal = Decimal(1)  # source value × scale = stored value
     manual: bool = False
     note: str = ""
+    computed: bool = False  # derived from statements in app.calc.valuation (not a single info field)
 
 
 D = Decimal
@@ -37,6 +38,13 @@ METRICS: dict[str, Metric] = {m.key: m for m in [
     Metric("revenue_growth", "Revenue growth (YoY, latest quarter)", "fraction", D(-1), D(10), "STOCK", "revenueGrowth"),
     Metric("profit_growth", "Profit growth (YoY, latest quarter)", "fraction", D(-1), D(20), "STOCK", "earningsGrowth"),
     Metric("beta", "Beta", "ratio", D(-3), D(5), "STOCK", "beta"),
+    Metric("ps", "P/S (trailing)", "ratio", D(0), D(200), "STOCK", computed=True, manual=True),
+    Metric("peg", "PEG", "ratio", D(0), D(100), "STOCK", computed=True, manual=True,
+           note="PEG = P/E ÷ (earnings growth × 100); growth = Yahoo earningsGrowth (latest quarter YoY)."),
+    Metric("fcf_latest", "Free cash flow (latest FY)", "inr", D("-1e15"), D("1e15"), "STOCK", computed=True, manual=True),
+    Metric("fcf_margin", "FCF margin", "fraction", D(-5), D(5), "STOCK", computed=True, manual=True),
+    Metric("fcf_yield", "FCF yield", "fraction", D(-5), D(5), "STOCK", computed=True, manual=True),
+    Metric("interest_coverage", "Interest coverage", "ratio", D(-1000), D(10000), "STOCK", computed=True, manual=True),
     Metric("roce", "ROCE", "fraction", D(-2), D(2), "STOCK", manual=True),
     Metric("promoter_holding", "Promoter holding", "fraction", D(0), D(1), "STOCK", manual=True),
     Metric("alpha", "Alpha (annual)", "fraction", D(-1), D(1), "STOCK", manual=True),
@@ -88,8 +96,10 @@ def check_manual(metric: str, value: str, source_note: str, as_of: date, today: 
         raise ManualEntryError("Value must be a number") from None
     if m.unit == "fraction":
         v = v / 100
+    elif m.unit == "inr":  # company-level amounts are entered in ₹ crore
+        v = v * Decimal(10_000_000)
     if (m.lo is not None and v < m.lo) or (m.hi is not None and v > m.hi):
-        scale = 100 if m.unit == "fraction" else 1
+        scale = 100 if m.unit == "fraction" else Decimal("1e-7") if m.unit == "inr" else 1
         raise ManualEntryError(f"{m.label} must be between {m.lo * scale} and {m.hi * scale}"
                                + ("%" if m.unit == "fraction" else ""))
     return v, None

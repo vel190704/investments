@@ -49,6 +49,9 @@ DEFAULTS.update({
         "management change", "rating action"], "concentration_change": True, "disclosure_stale": True,
         "review_due": True},
 })
+from app.calc.framework import DEFAULT_RUBRIC, DEFAULT_SECTOR_RULES
+
+DEFAULTS.update({"rubric": dict(DEFAULT_RUBRIC), "sector_rules": {k: list(v) for k, v in DEFAULT_SECTOR_RULES.items()}})
 SECTIONS = tuple(DEFAULTS)
 FALLBACK_MODEL = "claude-opus-5-5"
 PRICING_NOTE = "Verify against the provider's pricing page; the app ships no prices."
@@ -227,6 +230,25 @@ def validate(section: str, value: dict) -> dict:
                 "concentration_change": bool(value.get("concentration_change", True)),
                 "disclosure_stale": bool(value.get("disclosure_stale", True)),
                 "review_due": bool(value.get("review_due", True))}
+
+    if section == "rubric":
+        return {
+            "pe_vs_peer_tolerance_pct": _s(_dec(value.get("pe_vs_peer_tolerance_pct", "0"), "P/E tolerance", Decimal(0), Decimal(100))),
+            "peg_max": _s(_dec(value.get("peg_max", "1.0"), "PEG maximum", Decimal("0.01"), Decimal(10))),
+            "roe_min_pct": _s(_dec(value.get("roe_min_pct", "15"), "ROE minimum", Decimal(-100), Decimal(200))),
+            "de_max": _s(_dec(value.get("de_max", "2.0"), "D/E maximum", Decimal(0), Decimal(50))),
+            "fcf_positive": bool(value.get("fcf_positive", True)),
+            "fcf_not_declining": bool(value.get("fcf_not_declining", True)),
+        }
+
+    if section == "sector_rules":
+        allowed = {"debt_to_equity", "interest_coverage", "peg", "roe", "pe_vs_peers", "fcf_positive", "fcf_not_declining"}
+        out = {}
+        for sector, metrics in value.items():
+            if not str(sector).strip() or not isinstance(metrics, list) or any(m not in allowed for m in metrics):
+                raise SettingsError(f"sector rules: metrics must be from {sorted(allowed)}")
+            out[str(sector).strip()] = sorted(set(metrics))
+        return out
 
     # emergency_fund
     out = {}

@@ -57,7 +57,7 @@ def fake_info(symbol):
 
 def test_no_fabricated_values(session, workbook):
     import_workbook(session, workbook)
-    rep = fs.refresh_fundamentals(session, fetch=fake_info)
+    rep = fs.refresh_fundamentals(session, fetch=fake_info, statements=False)
     assert any("ITC" in e for e in rep["errors"])
     out = fs.report(session)
     by = {r["symbol"]: {c["metric"]: c for c in r["metrics"]} for r in out["stocks"]}
@@ -76,7 +76,7 @@ def test_no_fabricated_values(session, workbook):
 
 def test_manual_values_are_tagged_and_win(session, workbook):
     import_workbook(session, workbook)
-    fs.refresh_fundamentals(session, fetch=fake_info)
+    fs.refresh_fundamentals(session, fetch=fake_info, statements=False)
     lt = session.scalar(select(Instrument).where(Instrument.symbol == "LT"))
     fs.set_manual(session, lt.id, "roce", "15.2", "Annual report FY2026, p.212", date(2026, 3, 31))
     c = next(c for r in fs.report(session)["stocks"] if r["symbol"] == "LT" for c in r["metrics"] if c["metric"] == "roce")
