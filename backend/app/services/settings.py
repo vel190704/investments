@@ -37,6 +37,24 @@ DEFAULTS: dict[str, dict | None] = {
         "emergency": {"moderate_below": "1.0", "high_below": "0.5"},
     },
 }
+DEFAULTS.update({
+    "llm": {"outbound_enabled": False, "model": "claude-opus-5-5", "monthly_call_cap": 30, "weekly_job": False,
+            "price_in_per_mtok": "4", "price_out_per_mtok": "20", "effort": "high"},
+    "news": {"feeds": [
+        {"name": "ET Markets", "url": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"},
+        {"name": "Mint Markets", "url": "https://www.livemint.com/rss/markets"},
+        {"name": "Business Standard Markets", "url": "https://www.business-standard.com/rss/markets-106.rss"},
+        {"name": "Moneycontrol Business", "url": "https://www.moneycontrol.com/rss/business.xml"},
+    ]},
+    "alerts": {"announcement": True, "announcement_categories": [
+        "results", "order win / contract", "dividend", "board meeting", "acquisition / merger", "regulatory / legal",
+        "management change", "rating action"], "concentration_change": True, "disclosure_stale": True,
+        "review_due": True},
+})
+SECTIONS = tuple(DEFAULTS)
+LLM_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-fable-5-1")
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
 HEALTH_LABELS = {
     "company_lookthrough": ("Company total exposure (direct + funds), % of portfolio", "fraction"),
     "sector_largest": ("Largest sector, % of equity exposure", "fraction"),
@@ -162,6 +180,45 @@ def validate(section: str, value: dict) -> dict:
             raise SettingsError("emergency fund: the HIGH cut-off must be below the MODERATE cut-off")
         out["emergency"] = {"moderate_below": _s(mod), "high_below": _s(high)}
         return out
+
+    if section == "llm":
+        model = str(value.get("model", "claude-opus-5-5"))
+        if model not in LLM_MODELS:
+            raise SettingsError(f"model must be one of {', '.join(LLM_MODELS)}")
+        cap = value.get("monthly_call_cap", 30)
+        if not isinstance(cap, int) or isinstance(cap, bool) or not 0 <= cap <= 10000:
+            raise SettingsError("monthly call cap must be a whole number from 0 to 10,000")
+        effort = str(value.get("effort", "high"))
+        if effort not in EFFORTS:
+            raise SettingsError(f"effort must be one of {', '.join(EFFORTS)}")
+        return {"outbound_enabled": bool(value.get("outbound_enabled", False)), "model": model,
+                "monthly_call_cap": cap, "weekly_job": bool(value.get("weekly_job", False)),
+                "price_in_per_mtok": _s(_dec(value.get("price_in_per_mtok", "4"), "input price", Decimal(0), Decimal(1000))),
+                "price_out_per_mtok": _s(_dec(value.get("price_out_per_mtok", "20"), "output price", Decimal(0), Decimal(1000))),
+                "effort": effort}
+
+    if section == "news":
+        feeds = value.get("feeds")
+        if not isinstance(feeds, list):
+            raise SettingsError("feeds must be a list of {name, url}")
+        out_feeds = []
+        for f in feeds:
+            name, url = str((f or {}).get("name", "")).strip(), str((f or {}).get("url", "")).strip()
+            if not name or not url.startswith("https://"):
+                raise SettingsError("each feed needs a name and an https:// URL")
+            out_feeds.append({"name": name[:100], "url": url[:1000]})
+        return {"feeds": out_feeds}
+
+    if section == "alerts":
+        from app.calc.news import CATEGORIES
+
+        cats = value.get("announcement_categories", [])
+        if not isinstance(cats, list) or any(c not in CATEGORIES for c in cats):
+            raise SettingsError(f"categories must come from: {', '.join(CATEGORIES)}")
+        return {"announcement": bool(value.get("announcement", True)), "announcement_categories": cats,
+                "concentration_change": bool(value.get("concentration_change", True)),
+                "disclosure_stale": bool(value.get("disclosure_stale", True)),
+                "review_due": bool(value.get("review_due", True))}
 
     # emergency_fund
     out = {}
