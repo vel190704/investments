@@ -31,11 +31,14 @@ def usage(s: Session) -> dict:
     q = select(func.count(), func.coalesce(func.sum(LlmCall.input_tokens), 0),
                func.coalesce(func.sum(LlmCall.output_tokens), 0)).where(LlmCall.created_at >= month_start_utc())
     calls, tin, tout = s.execute(q).one()
-    cost = (Decimal(tin) * Decimal(cfg["price_in_per_mtok"]) + Decimal(tout) * Decimal(cfg["price_out_per_mtok"])) / 1_000_000
+    pin, pout = cfg.get("price_in_per_mtok"), cfg.get("price_out_per_mtok")
+    if pin is None or pout is None:
+        cost, note = None, f"Set input/output prices in Settings to estimate cost. {st.PRICING_NOTE}"
+    else:
+        cost = str(((Decimal(tin) * Decimal(pin) + Decimal(tout) * Decimal(pout)) / 1_000_000).quantize(Decimal("0.0001")))
+        note = f"Estimate = tokens × ${pin}/M input + ${pout}/M output (your Settings). {st.PRICING_NOTE}"
     return {"calls_this_month": calls, "cap": cfg["monthly_call_cap"], "input_tokens": tin, "output_tokens": tout,
-            "estimated_cost_usd": str(cost.quantize(Decimal("0.0001"))),
-            "pricing_note": f"Estimate = tokens × ${cfg['price_in_per_mtok']}/M input + ${cfg['price_out_per_mtok']}/M "
-                            "output (edit in Settings); actual billing may differ."}
+            "estimated_cost_usd": cost, "pricing_note": note}
 
 
 def gate(s: Session) -> str | None:
@@ -55,7 +58,7 @@ def gate(s: Session) -> str | None:
 
 def default_provider(s: Session) -> LLMProvider:
     cfg = st.get(s, "llm")
-    return AnthropicProvider(model=cfg["model"], effort=cfg["effort"])
+    return AnthropicProvider(model=st.llm_model(s), effort=cfg["effort"], refusal_fallback=cfg.get("refusal_fallback", False))
 
 
 def _log(s: Session, purpose: str, model: str, ok: bool, tin: int = 0, tout: int = 0, error: str | None = None) -> None:
@@ -70,7 +73,9 @@ def _latest(s: Session, iid: int) -> LlmAnalysis | None:
 def card(a: LlmAnalysis | None, current_hash: str | None = None) -> dict | None:
     if a is None:
         return None
-    out = {"id": a.id, "status": a.status, "model": a.model, "prompt_version": a.prompt_version,
+    out = {"id": a.id, "kind": a.kind, "status": a.status, "model": a.model, "requested_model": a.requested_model,
+           "fallback_used": bool(a.requested_model and a.requested_model != a.model),
+           "prompt_version": a.prompt_version,
            "created_at": as_utc(a.created_at).isoformat(), "data_as_of": a.data_as_of.isoformat() if a.data_as_of else None,
            "attempts": a.attempts, "input_tokens": a.input_tokens, "output_tokens": a.output_tokens,
            "stale": current_hash is not None and a.input_hash != current_hash, "errors": a.errors if a.status != "OK" else []}
@@ -86,7 +91,7 @@ def analyze(s: Session, iid: int, refresh: bool = False, provider: LLMProvider |
     today = today or today_ist()
     cfg = st.get(s, "llm")
     inp = build_input(s, iid, today)
-    model = provider.model if provider else cfg["model"]
+    model = provider.model if provider else st.llm_model(s)
     h = input_hash(inp, model, prompts.PROMPT_VERSION)
     cached = s.scalar(select(LlmAnalysis).where(LlmAnalysis.instrument_id == iid, LlmAnalysis.input_hash == h)
                       .order_by(LlmAnalysis.id.desc()).limit(1))
@@ -122,7 +127,8 @@ def analyze(s: Session, iid: int, refresh: bool = False, provider: LLMProvider |
                                {"role": "user", "content": "Your JSON failed validation:\n- " + "\n- ".join(errors)
                                 + "\nReturn corrected JSON that follows every rule."}]
     a = LlmAnalysis(instrument_id=iid, input_hash=h, input_json=inp, output_json=data, status="OK" if data else "FAILED",
-                    errors=errors if not data else [], model=served, prompt_version=prompts.PROMPT_VERSION,
+                    errors=errors if not data else [], model=served, requested_model=provider.model,
+                    prompt_version=prompts.PROMPT_VERSION,
                     data_as_of=data_as_of(inp), attempts=attempts, input_tokens=tin, output_tokens=tout)
     s.add(a)
     s.flush()
@@ -133,9 +139,10 @@ def preview(s: Session, iid: int) -> dict:
     """Exactly what would be sent (system prompt + input), without calling anything."""
     cfg = st.get(s, "llm")
     inp = build_input(s, iid, today_ist())
-    return {"model": cfg["model"], "prompt_version": prompts.PROMPT_VERSION, "system": prompts.SYSTEM_PROMPT,
+    model = st.llm_model(s)
+    return {"model": model, "prompt_version": prompts.PROMPT_VERSION, "system": prompts.SYSTEM_PROMPT,
             "input": inp, "output_schema": prompts.OUTPUT_SCHEMA,
-            "input_hash": input_hash(inp, cfg["model"], prompts.PROMPT_VERSION)}
+            "input_hash": input_hash(inp, model, prompts.PROMPT_VERSION)}
 
 
 def cards(s: Session) -> dict:
@@ -148,14 +155,14 @@ def cards(s: Session) -> dict:
         if r.inst.asset_type != "STOCK":
             continue
         try:
-            h = input_hash(build_input(s, r.inst.id, today_ist()), cfg["model"], prompts.PROMPT_VERSION)
+            h = input_hash(build_input(s, r.inst.id, today_ist()), st.llm_model(s), prompts.PROMPT_VERSION)
         except InputError:
             h = None
         latest = _latest(s, r.inst.id)
         out.append({"instrument_id": r.inst.id, "symbol": r.inst.symbol, "name": r.inst.name,
                     "card": card(latest, h)})
-    return {"holdings": out, "gate": gate(s), "settings": {k: cfg[k] for k in ("outbound_enabled", "model", "effort",
-                                                                           "monthly_call_cap", "weekly_job")},
+    return {"holdings": out, "gate": gate(s), "settings": {**{k: cfg.get(k) for k in (
+                "outbound_enabled", "effort", "monthly_call_cap", "weekly_job", "refusal_fallback")}, "model": st.llm_model(s)},
             "usage": usage(s), "funds_note": "AI analysis covers direct stocks only."}
 
 

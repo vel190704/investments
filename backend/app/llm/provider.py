@@ -31,7 +31,8 @@ class AnthropicProvider:
 
     name = "anthropic"
 
-    def __init__(self, model: str = "claude-opus-5-5", effort: str = "high", api_key: str | None = None):
+    def __init__(self, model: str = "claude-opus-5-5", effort: str = "high", api_key: str | None = None,
+                 refusal_fallback: bool = False):
         import anthropic
 
         from app.config import get_settings
@@ -39,22 +40,20 @@ class AnthropicProvider:
         key = api_key or get_settings().anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not key:
             raise LLMUnavailable("No ANTHROPIC_API_KEY set (add it to .env); AI analysis is disabled.")
-        self.model, self.effort = model, effort
+        self.model, self.effort, self.refusal_fallback = model, effort, refusal_fallback
         self._anthropic = anthropic
         self._client = anthropic.Anthropic(api_key=key, timeout=120.0, max_retries=2)
 
     def complete_json(self, system: str, messages: list[dict], schema: dict, max_tokens: int = 16000) -> Completion:
         a = self._anthropic
+        params = dict(model=self.model, max_tokens=max_tokens, system=system, messages=messages,
+                      output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}})
         try:
-            resp = self._client.beta.messages.create(
-                model=self.model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=messages,
-                output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}},
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
-            )
+            if self.refusal_fallback:  # opt-in (Settings); default off
+                resp = self._client.beta.messages.create(**params, betas=["server-side-fallback-2026-07-01"],
+                                                         fallbacks="default")
+            else:
+                resp = self._client.messages.create(**params)
         except a.AuthenticationError:
             raise LLMUnavailable("The Anthropic API key was rejected.") from None
         except a.RateLimitError:

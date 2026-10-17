@@ -38,8 +38,8 @@ DEFAULTS: dict[str, dict | None] = {
     },
 }
 DEFAULTS.update({
-    "llm": {"outbound_enabled": False, "model": "claude-opus-5-5", "monthly_call_cap": 30, "weekly_job": False,
-            "price_in_per_mtok": "4", "price_out_per_mtok": "20", "effort": "high"},
+    "llm": {"outbound_enabled": False, "model": None, "monthly_call_cap": 30, "weekly_job": False,
+            "price_in_per_mtok": None, "price_out_per_mtok": None, "effort": "high", "refusal_fallback": False},
     "news": {"feeds": [
         {"name": "ET Markets", "url": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"},
         {"name": "Mint Markets", "url": "https://www.livemint.com/rss/markets"},
@@ -50,7 +50,8 @@ DEFAULTS.update({
         "review_due": True},
 })
 SECTIONS = tuple(DEFAULTS)
-LLM_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-fable-5-1")
+FALLBACK_MODEL = "claude-opus-5-5"
+PRICING_NOTE = "Verify against the provider's pricing page; the app ships no prices."
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 HEALTH_LABELS = {
@@ -180,20 +181,29 @@ def validate(section: str, value: dict) -> dict:
         return out
 
     if section == "llm":
-        model = str(value.get("model", "claude-opus-5-5"))
-        if model not in LLM_MODELS:
-            raise SettingsError(f"model must be one of {', '.join(LLM_MODELS)}")
+        import re
+
+        model = value.get("model")
+        model = str(model).strip() if model not in (None, "") else None
+        if model is not None and not re.fullmatch(r"[a-z0-9][a-z0-9.\-]{2,80}", model):
+            raise SettingsError("model must be a model id such as claude-opus-5-5 (lower-case letters, digits, dots, dashes)")
         cap = value.get("monthly_call_cap", 30)
         if not isinstance(cap, int) or isinstance(cap, bool) or not 0 <= cap <= 10000:
             raise SettingsError("monthly call cap must be a whole number from 0 to 10,000")
         effort = str(value.get("effort", "high"))
         if effort not in EFFORTS:
             raise SettingsError(f"effort must be one of {', '.join(EFFORTS)}")
+        def price(key, label):
+            v = value.get(key)
+            if v in (None, ""):
+                return None
+            return _s(_dec(v, label, Decimal(0), Decimal(1000)))
+
         return {"outbound_enabled": bool(value.get("outbound_enabled", False)), "model": model,
                 "monthly_call_cap": cap, "weekly_job": bool(value.get("weekly_job", False)),
-                "price_in_per_mtok": _s(_dec(value.get("price_in_per_mtok", "4"), "input price", Decimal(0), Decimal(1000))),
-                "price_out_per_mtok": _s(_dec(value.get("price_out_per_mtok", "20"), "output price", Decimal(0), Decimal(1000))),
-                "effort": effort}
+                "price_in_per_mtok": price("price_in_per_mtok", "input price"),
+                "price_out_per_mtok": price("price_out_per_mtok", "output price"),
+                "effort": effort, "refusal_fallback": bool(value.get("refusal_fallback", False))}
 
     if section == "news":
         feeds = value.get("feeds")
@@ -299,3 +309,10 @@ def health_thresholds(s: Session) -> dict:
     e = v.get("emergency", d["emergency"])
     out["emergency"] = (Decimal(e["high_below"]), Decimal(e["moderate_below"]))
     return out
+
+
+def llm_model(s: Session) -> str:
+    """Settings model, else CLAUDE_MODEL from .env, else the documented default."""
+    from app.config import get_settings
+
+    return get(s, "llm").get("model") or get_settings().claude_model or FALLBACK_MODEL

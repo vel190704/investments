@@ -123,7 +123,8 @@ def enable(session, monkeypatch, cap=30):
     from app.config import get_settings
 
     monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-test")
-    st.put(session, "llm", {**st.get(session, "llm"), "outbound_enabled": True, "monthly_call_cap": cap})
+    st.put(session, "llm", {**st.get(session, "llm"), "outbound_enabled": True, "monthly_call_cap": cap,
+                            "model": "claude-opus-5-5", "price_in_per_mtok": "4", "price_out_per_mtok": "20"})
 
 
 def good_for(inp):
@@ -238,3 +239,59 @@ def test_category_suggestions_only_for_other_and_only_headlines(session, workboo
     sent = json.loads(fake.calls[0][0]["content"])
     assert [h["headline"] for h in sent["headlines"]] == ["L&T inks pact with state utility"]  # rule-categorised item not sent
     assert other.category == "order win / contract" and other.category_origin == "MODEL"
+
+
+
+def test_prices_not_hardcoded_and_model_from_env(session, monkeypatch):
+    from app.config import get_settings
+
+    u = an.usage(session)
+    assert u["estimated_cost_usd"] is None and "Set input/output prices" in u["pricing_note"]
+    assert "Verify against the provider's pricing page" in u["pricing_note"]
+    monkeypatch.setattr(get_settings(), "claude_model", "claude-sonnet-5")
+    assert st.llm_model(session) == "claude-sonnet-5"
+    st.put(session, "llm", {**st.get(session, "llm"), "model": "claude-opus-5-5"})
+    assert st.llm_model(session) == "claude-opus-5-5"
+    import pytest as _p
+    with _p.raises(st.SettingsError):
+        st.put(session, "llm", {**st.get(session, "llm"), "model": "Claude Opus!"})
+    assert st.get(session, "llm")["refusal_fallback"] is False
+
+
+def test_card_shows_model_that_answered(session, workbook, monkeypatch):
+    lt = setup_book(session, workbook)
+    enable(session, monkeypatch)
+    inp = build_input(session, lt.id, TODAY)
+    fake = FakeProvider([good_for(inp)], model="claude-opus-5-5")
+    fake.complete_json = (lambda orig: lambda *a, **k: Completion(orig(*a, **k).text, "claude-opus-4-8", 10, 5))(fake.complete_json)
+    c = an.analyze(session, lt.id, provider=fake, today=TODAY)["card"]
+    assert c["model"] == "claude-opus-4-8" and c["requested_model"] == "claude-opus-5-5" and c["fallback_used"]
+
+
+def test_provider_fallback_param_only_when_enabled(monkeypatch):
+    import types
+    from app.llm import provider as pv
+
+    calls = {}
+
+    class Msgs:
+        def __init__(self, tag):
+            self.tag = tag
+
+        def create(self, **kw):
+            calls[self.tag] = kw
+            return types.SimpleNamespace(stop_reason="end_turn", model=kw["model"],
+                                         content=[types.SimpleNamespace(type="text", text="{}")],
+                                         usage=types.SimpleNamespace(input_tokens=1, output_tokens=1))
+
+    class Client:
+        def __init__(self, **kw):
+            self.messages = Msgs("plain")
+            self.beta = types.SimpleNamespace(messages=Msgs("beta"))
+
+    import anthropic
+    monkeypatch.setattr(anthropic, "Anthropic", Client)
+    pv.AnthropicProvider(api_key="k").complete_json("s", [], {})
+    assert "plain" in calls and "fallbacks" not in calls["plain"]
+    pv.AnthropicProvider(api_key="k", refusal_fallback=True).complete_json("s", [], {})
+    assert calls["beta"]["fallbacks"] == "default" and calls["beta"]["betas"] == ["server-side-fallback-2026-07-01"]
