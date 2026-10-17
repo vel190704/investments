@@ -37,11 +37,11 @@ export default function JournalPageView() {
                        {open === h.instrument_id ? "Close" : h.latest ? "New version / history" : "Write thesis"}
                      </Button>}>
               {h.latest ? <Entry e={h.latest} /> : <p className="text-sm text-muted-foreground">No thesis yet.</p>}
-              <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+              {h.asset_type === "STOCK" && <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                 <input type="checkbox" checked={h.send_to_llm}
                        onChange={async (ev) => { await apiPut(`/journal/${h.instrument_id}/optin`, { send_to_llm: ev.target.checked }); reload(); }} />
                 Include my latest thesis in AI analysis for this holding (off by default; otherwise journal text never leaves this machine)
-              </label>
+              </label>}
               {open === h.instrument_id && <Editor h={h} onSaved={reload} />}
             </Section>
           ))}

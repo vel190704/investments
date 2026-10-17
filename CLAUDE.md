@@ -74,6 +74,28 @@ It never places orders. See PLAN.md for the design and README.md for usage.
 - Portfolio Health has no overall score or ranking; LOW/MODERATE/HIGH only where a threshold exists
   in code (editable in Settings › health); everything else is "information only".
 
+## Outbound requests, news and the LLM (Phase 4)
+- All news/announcement fetching goes through `app/net/polite.py`, which:
+  - checks robots.txt (a 403 on robots.txt means not permitted);
+  - rate-limits per host and caches responses;
+  - skips a failing host for 10 min.
+  - Blocked sources show "Source unavailable". Never spoof the User-Agent or otherwise work
+    around blocking. Google News RSS is disallowed by its robots.txt.
+- News text stored is the source's own title/summary only. Categories come from keyword rules
+  first; the LLM may only suggest a category for items the rules left as "other" (origin MODEL).
+- LLM calls happen only when the privacy toggle (`llm.outbound_enabled`, default false) is on,
+  `ANTHROPIC_API_KEY` is set, and the monthly cap allows it (`app/services/analysis.py::gate`).
+- LLM input is built only from stored data (`app/llm/inputs.py`): percentages, never rupee
+  amounts, quantities, platform/account details or other holdings; thesis text only with
+  per-holding opt-in.
+- LLM output must pass `app/llm/validate.py` (no invented numbers, no recommendation/prediction
+  wording, citations to input ids, schema); failures are flagged, never shown as analysis.
+  Bump `PROMPT_VERSION` when the prompt or schema changes.
+- Broker adapters are read-only: no order/modify/cancel methods, and the Groww HTTP layer
+  allow-lists only the token and holdings endpoints (tested). Reconciliation never writes;
+  the user confirms an in-app transaction.
+- The thesis journal is append-only (no update/delete paths).
+
 ## Settings
 - User choices have no invented defaults: targets and the emergency fund start unset ("Set your
   targets", empty state). Projection rates ship as flagged placeholders until reviewed.
@@ -90,7 +112,8 @@ It never places orders. See PLAN.md for the design and README.md for usage.
   mathematical future value would be approximately Z." Never "you will have".
 - Time series show only stored snapshots; never back-fill or estimate history.
 - Show the date of all data; separate historical data from assumptions.
-- Footer disclaimer: personal analytics tool, not investment advice.
+- Footer disclaimer: personal analytics tool, not investment advice. Analysis pages (news, macro,
+  AI analysis) also carry: "Scenario and context analysis, not a prediction or investment advice."
 
 ## Style
 - Python 3.12+ compatible (machine has 3.14), type hints, FastAPI + SQLAlchemy 2.x style.

@@ -11,6 +11,14 @@ contribution planner, mathematical projections, and a separate emergency fund.
 It shows sector exposure, fundamentals, and what your funds hold combined with your direct
 stocks (look-through), plus a Portfolio Health page with no overall score.
 
+Phase 4 adds:
+- news and exchange announcements per holding;
+- a macro snapshot and exposure by sensitivity tag;
+- optional AI scenario analysis with strict guardrails;
+- a thesis journal;
+- read-only Groww reconciliation;
+- in-app alerts.
+
 It **never places orders**, has no login, and binds only to `127.0.0.1`.
 *Personal analytics tool, not investment advice.*
 
@@ -85,6 +93,12 @@ make migrate        # apply migrations now (backs up first)
 | Fund look-through | upload AMC disclosures / index weights; total company exposure (direct + via funds); pairwise overlap |
 | Fundamentals | per-stock metrics from Yahoo Finance with source/date; manual ROCE, promoter holding, alpha; fund facts |
 | Classification | override asset class (e.g. Gold, Debt/Cash), sector and region per instrument |
+| News & announcements | NSE official announcement feeds + allowed publisher feeds, rule-categorised, sorted by your look-through exposure |
+| Macro & scenarios | USD/INR, Brent, Nifty 50 (automated); repo rate, CPI (manual); sector sensitivity tags; exposure by tag |
+| AI analysis | per-stock scenario/context cards (optional, guardrailed, cached), with "View exactly what was sent" |
+| Thesis journal / Strategy vs actual | append-only theses with review dates; stated targets/theses next to what changed |
+| Broker reconcile | read-only Groww holdings vs your records by ISIN (differences only) |
+| Alerts | in-app alerts from rules you toggle in Settings |
 | Import / Mappings / Settings | data management |
 
 ## In-app transactions and export
@@ -208,6 +222,86 @@ These are labelled "approximated from index weights, as of <date>". A disclosure
 months is flagged as stale. Enter the tracking difference on Fundamentals to see how closely
 the fund follows its index.
 
+## News sources and what is (not) fetched
+
+All fetching goes through one polite client:
+- a clear User-Agent;
+- `robots.txt` checked first; a 403 on `robots.txt` counts as "not permitted";
+- at least 2 s between requests to the same host, and responses cached for 30 min;
+- a host that fails is skipped for 10 min.
+
+A blocked source shows **"Source unavailable"** and is never worked around.
+
+| source | status |
+|---|---|
+| NSE official RSS feeds (announcements, board meetings, results, corporate actions) | used; matched to holdings by NSE symbol, stored by ISIN |
+| ET Markets, Mint Markets RSS (default feeds; editable in Settings) | used; a headline must name the company or its upper-case symbol |
+| Google News RSS | **not usable**: its robots.txt disallows `/rss`, so it always shows "Source unavailable" |
+| Business Standard, Moneycontrol | answered 403 to `robots.txt` for this tool on 2026-10-17, so they are not in the defaults |
+| BSE | API refuses non-browser clients, so it is not used |
+
+Only holdings with a **confirmed ISIN** (Mappings) are tracked. For funds, news covers their
+top 5 holdings by your look-through exposure, never generic fund news. Items older than 90
+days are deleted.
+
+## AI analysis: API key, privacy toggle, what is sent
+
+1. Put `ANTHROPIC_API_KEY=...` in `.env` and restart the backend.
+2. In **Settings › AI analysis**, tick **Allow outbound LLM calls**. It is off by default; while
+   it is off, nothing is sent anywhere. You can also set:
+   - the model (default `claude-opus-5-5`);
+   - effort;
+   - a monthly call cap (default 30);
+   - token prices, used for the cost estimate;
+   - the optional weekly job.
+3. On **AI analysis**, click **Generate** for a stock. Results are cached by a hash of the
+   inputs; a call is made again only when the inputs change or you click Refresh.
+
+**Sent** (per stock):
+- company name, NSE symbol and sector;
+- your portfolio weight and look-through exposure as **percentages**;
+- fundamentals as displayed, with source/as-of, and "N/A" kept as N/A;
+- "within my portfolio" medians;
+- up to 10 headlines from the last 30 days;
+- the macro snapshot and the sector's sensitivity tags;
+- your latest thesis **only if** you ticked "include in AI analysis" for that holding.
+
+**Never sent:**
+- rupee amounts, quantities, invested/value/P&L, average cost;
+- platform or account details;
+- other holdings' names;
+- journal text without opt-in.
+
+The exact system prompt and input of every analysis are shown under **View exactly what was
+sent** (or *Preview what would be sent* before the first call).
+
+Every answer is validated before display. It is rejected if it:
+- (a) contains a number that is not in the input;
+- (b) uses buy/sell/hold/target-price/"will rise" wording;
+- (c) has a statement without a valid citation to an input id;
+- (d) fails the JSON schema.
+
+A rejected answer is retried once with the reasons; if it fails again it is flagged and not
+shown. Calls use Anthropic's server-side refusal fallback (`fallbacks: "default"`); the card
+shows which model served it.
+
+## Groww reconciliation (optional, read-only)
+
+1. In `.env`:
+   - `GROWW_ENABLED=true`;
+   - `GROWW_API_KEY` — an API key from the Groww Cloud API keys page, approved daily there;
+   - optionally `GROWW_TOTP_SECRET` — the base32 secret behind your authenticator, used to
+     generate the code locally.
+2. Restart the backend and open **Broker reconcile**. Click **Connect** once a day (enter the
+   6-digit code if you didn't set a secret). The daily token is kept in memory only.
+3. The page lists differences by ISIN (quantity, or average price > 0.5%). **Add as
+   transaction** opens a pre-filled form you review; nothing is written until you confirm, and
+   the result is an in-app (`ui`) entry you can delete.
+
+The adapter can only call `POST /v1/token/api/access` and `GET /v1/holdings/user`; any other
+path is blocked before sending (tested). There are no order methods. Zerodha Coin (Kite MF)
+is a documented stub. With `GROWW_ENABLED` unset, the app behaves exactly as before.
+
 ## Data sources
 
 | what | source | notes |
@@ -222,6 +316,8 @@ the fund follows its index.
 | Fundamentals | Yahoo Finance via yfinance | only plausible values; otherwise N/A with the reason |
 | ROCE, promoter holding, alpha, expense ratio, exit load, tracking error/difference | **manual** (source note + as-of date required) | no reliable free source; nothing is scraped |
 | Fund holdings | your uploads of AMC disclosures / index weights | |
+| USD/INR, Brent, Nifty 50 | Yahoo Finance via yfinance (`INR=X`, `BZ=F`, `^NSEI`) | N/A on failure; never filled from memory |
+| Repo rate, CPI and others | **manual** (source note + as-of required) | |
 
 Every market-derived number shows its source and date. Anything missing shows
 "Data unavailable"; nothing is estimated.

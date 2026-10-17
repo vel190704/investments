@@ -3,8 +3,7 @@
 Single-user, local-first portfolio analytics and planning tool for an Indian retail investor.
 It **never places orders**. Excel workbook = source of truth for transactions.
 
-Status: Phases 0–3 done (§10 = Phase 2, §11 = Phase 3). Phase 4 (§12) in progress: news and
-announcements, macro, LLM scenario analysis, thesis journal, read-only broker reconciliation, alerts.
+Status: Phases 0–4 done (§10 = Phase 2, §11 = Phase 3, §12 = Phase 4).
 
 ---
 
@@ -790,3 +789,7 @@ or investment advice."
 5. Refusal fallbacks (`fallbacks: "default"`) are enabled on LLM calls, so a safety decline is
    retried on Anthropic's recommended fallback model; the card shows the model that served it.
 6. Reconciliation covers Groww stocks/ETFs only (Coin mutual funds have no adapter).
+7. One news URL is stored once; if a headline names two holdings it is filed under the one with
+   the larger exposure.
+8. NSE's RSS host timed out during the live test (2026-10-17); it degrades to "Source
+   unavailable" and is retried on the next refresh after the 10-minute cool-down.
