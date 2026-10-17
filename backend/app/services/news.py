@@ -159,7 +159,8 @@ def refresh_news(s: Session, client: PoliteClient | None = None, now: datetime |
                     _status(s, "Google News", rest.isin, False, str(e))
                 break
 
-    report["pruned"] = s.execute(delete(NewsItem).where(NewsItem.published_at < cutoff)).rowcount or 0
+    report["pruned"] = s.execute(delete(NewsItem).where(NewsItem.published_at < cutoff)
+                                 .execution_options(synchronize_session="fetch")).rowcount or 0
     s.flush()
     return report
 
