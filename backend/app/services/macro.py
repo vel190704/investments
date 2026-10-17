@@ -13,7 +13,7 @@ from app.models import MacroValue, SectorSensitivity
 from app.timeutil import as_utc, today_ist, utcnow
 
 AUTO = {  # key: (label, yfinance ticker, unit)
-    "usd_inr": ("USD/INR", "INR=X", "₹ per US$"),
+    "usd_inr": ("USD/INR", "INR=X", "INR per USD"),
     "brent_usd": ("Brent crude", "BZ=F", "US$ per barrel"),
     "nifty50": ("Nifty 50", "^NSEI", "index points"),
 }
