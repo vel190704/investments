@@ -308,3 +308,142 @@ class DisclosureHolding(Base):
     is_equity: Mapped[bool] = mapped_column(Boolean)
 
     disclosure: Mapped[FundDisclosure] = relationship(back_populates="holdings")
+
+
+# ---------------- Phase 4
+class NewsItem(Base):
+    """A news headline or exchange announcement for a company (by ISIN). Text is source text only."""
+
+    __tablename__ = "news_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    isin: Mapped[str] = mapped_column(String(20), index=True)
+    instrument_id: Mapped[int | None] = mapped_column(ForeignKey("instruments.id"))
+    company: Mapped[str] = mapped_column(String(300))
+    title: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(100))
+    source_kind: Mapped[str] = mapped_column(String(10))  # EXCHANGE | NEWS
+    url: Mapped[str] = mapped_column(String(1000), unique=True)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    category: Mapped[str] = mapped_column(String(40))
+    category_origin: Mapped[str] = mapped_column(String(10))  # RULE | MODEL
+    summary: Mapped[str | None] = mapped_column(Text)
+    dedupe_key: Mapped[str] = mapped_column(String(64), index=True)
+
+
+class NewsSourceStatus(Base):
+    __tablename__ = "news_source_status"
+    __table_args__ = (UniqueConstraint("source", "isin"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(100))
+    isin: Mapped[str | None] = mapped_column(String(20))  # None = whole-source status
+    ok: Mapped[bool] = mapped_column(Boolean)
+    message: Mapped[str] = mapped_column(Text)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MacroValue(Base):
+    __tablename__ = "macro_values"
+    __table_args__ = (UniqueConstraint("key", "origin"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(50))
+    origin: Mapped[str] = mapped_column(String(10))  # AUTO | MANUAL
+    label: Mapped[str] = mapped_column(String(100))
+    value: Mapped[Decimal | None] = mapped_column(DecimalText)
+    unit: Mapped[str] = mapped_column(String(30))
+    source: Mapped[str] = mapped_column(String(300))
+    as_of: Mapped[date | None] = mapped_column(Date)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    status: Mapped[str] = mapped_column(String(10), default="OK")  # OK | UNAVAILABLE
+    note: Mapped[str | None] = mapped_column(Text)
+
+
+class SectorSensitivity(Base):
+    __tablename__ = "sector_sensitivities"
+
+    sector: Mapped[str] = mapped_column(String(150), primary_key=True)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    origin: Mapped[str] = mapped_column(String(10))  # STARTER | USER
+    note: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class LlmAnalysis(Base):
+    __tablename__ = "llm_analyses"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
+    input_hash: Mapped[str] = mapped_column(String(64), index=True)
+    input_json: Mapped[dict] = mapped_column(JSON)
+    output_json: Mapped[dict | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(10))  # OK | FAILED
+    errors: Mapped[list] = mapped_column(JSON, default=list)
+    model: Mapped[str] = mapped_column(String(100))
+    prompt_version: Mapped[str] = mapped_column(String(20))
+    data_as_of: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    attempts: Mapped[int] = mapped_column(Integer, default=1)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class LlmCall(Base):
+    __tablename__ = "llm_calls"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    purpose: Mapped[str] = mapped_column(String(20))  # analysis | category
+    model: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    ok: Mapped[bool] = mapped_column(Boolean)
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class ThesisEntry(Base):
+    """Append-only: a new version is a new row; rows are never updated or deleted."""
+
+    __tablename__ = "thesis_entries"
+    __table_args__ = (UniqueConstraint("instrument_id", "version"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    why: Mapped[str] = mapped_column(Text)
+    change_view: Mapped[str] = mapped_column(Text)
+    horizon: Mapped[str] = mapped_column(String(100))
+    review_date: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    linked_txn_ids: Mapped[list] = mapped_column(JSON, default=list)
+    linked_change_ids: Mapped[list] = mapped_column(JSON, default=list)
+
+
+class ThesisOptIn(Base):
+    __tablename__ = "thesis_optin"
+
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), primary_key=True)
+    send_to_llm: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class Alert(Base):
+    __tablename__ = "alerts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rule: Mapped[str] = mapped_column(String(40))
+    dedupe_key: Mapped[str] = mapped_column(String(200), unique=True)
+    instrument_id: Mapped[int | None] = mapped_column(ForeignKey("instruments.id"))
+    title: Mapped[str] = mapped_column(String(300))
+    detail: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AlertState(Base):
+    __tablename__ = "alert_state"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON)
