@@ -193,6 +193,11 @@ export type Settings = {
     sector_ranges: SettingsSection<Record<string, { min: string; max: string }> | null>;
     themes: SettingsSection<Record<string, string[]> | null>;
     health: SettingsSection<Record<string, Record<string, string>>>;
+    llm: SettingsSection<{ outbound_enabled: boolean; model: string; monthly_call_cap: number; weekly_job: boolean;
+                           price_in_per_mtok: string; price_out_per_mtok: string; effort: string }>;
+    news: SettingsSection<{ feeds: { name: string; url: string }[] }>;
+    alerts: SettingsSection<{ announcement: boolean; announcement_categories: string[]; concentration_change: boolean;
+                              disclosure_stale: boolean; review_due: boolean }>;
   };
 };
 export type PlanLineOut = {
@@ -298,6 +303,63 @@ export type HealthDim = {
   thresholds: string | null; available: boolean; info_only: boolean;
 };
 export type Health = { valuation_date: string; dimensions: HealthDim[]; stale: { warning: string }[]; not_looked_through: string[]; note: string };
+
+// ---- Phase 4 types ----
+export type NewsItem = {
+  id: number; isin: string; company: string; instrument_id: number | null; title: string; source: string;
+  source_kind: "EXCHANGE" | "NEWS"; url: string; published_at: string; fetched_at: string; category: string;
+  category_origin: "RULE" | "MODEL"; summary: string | null; exposure: number; via_funds: string[];
+};
+export type NewsFeed = {
+  items: NewsItem[]; categories: string[]; basis: string;
+  companies: { isin: string; name: string; symbol: string | null; exposure: number; direct: boolean; via_funds: string[];
+               unavailable: { source: string; message: string }[] }[];
+  untracked: { instrument_id: number; name: string; reason: string }[];
+  funds: { fund: string; companies: string[]; note: string }[];
+  sources: { source: string; ok: boolean; message: string; checked_at: string }[];
+};
+export type MacroRow = {
+  key: string; label: string; unit: string; origin: "AUTO" | "MANUAL"; value: string | null; display: string;
+  source: string | null; as_of: string | null; fetched_at: string | null; note: string | null; manual: boolean;
+};
+export type MacroPage = {
+  snapshot: MacroRow[]; tags: string[]; starter_label: string; basis: string;
+  table: { sector: string; tags: string[]; origin: string | null; note: string | null; held_pct: string }[];
+  scenarios: { scenario: string; label: string;
+               tags: { tag: string; weight: string; weight_text: string; sectors: { sector: string; pct: string }[]; holdings: string[] }[] }[];
+};
+export type Statement = { text: string; citations: string[] };
+export type AnalysisCard = {
+  id: number; status: "OK" | "FAILED"; model: string; prompt_version: string; created_at: string; data_as_of: string | null;
+  attempts: number; input_tokens: number; output_tokens: number; stale: boolean; errors: string[];
+  analysis?: {
+    valuation_context: Statement[]; business_quality: Statement[]; key_risks: Statement[]; macro_sensitivity: Statement[];
+    what_would_change_this_view: Statement[]; data_gaps: Statement[];
+    scenarios: { scenario: string; direction: string; because: string; citations: string[]; sentence: string }[];
+  };
+};
+export type LlmUsage = { calls_this_month: number; cap: number; input_tokens: number; output_tokens: number;
+                         estimated_cost_usd: string; pricing_note: string };
+export type AnalysisPage = {
+  holdings: { instrument_id: number; symbol: string; name: string; card: AnalysisCard | null }[];
+  gate: string | null; usage: LlmUsage; funds_note: string;
+  settings: { outbound_enabled: boolean; model: string; effort: string; monthly_call_cap: number; weekly_job: boolean };
+};
+export type ThesisEntry = {
+  id: number; instrument_id: number; version: number; why: string; change_view: string; horizon: string;
+  review_date: string | null; review_due: boolean; created_at: string; linked_txn_ids: number[]; linked_change_ids: number[];
+};
+export type JournalPage = {
+  holdings: { instrument_id: number; name: string; symbol: string | null; asset_type: string; latest: ThesisEntry | null;
+              versions: number; send_to_llm: boolean; transactions: { id: number; date: string; type: string; source: string }[] }[];
+  review_due: (ThesisEntry & { name: string })[]; note: string;
+};
+export type AlertItem = { id: number; rule: string; title: string; detail: string; instrument_id: number | null; created_at: string; read: boolean };
+export type ReconcileRow = {
+  isin: string; name: string; instrument_id?: number; kind: string; broker_quantity: string; db_quantity: string;
+  broker_avg_price: string | null; db_avg_cost: string | null;
+  suggested: { type: string; quantity: string; price: string | null } | null;
+};
 
 // ---- fetch helpers ----
 export class ApiError extends Error {}

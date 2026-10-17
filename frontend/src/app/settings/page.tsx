@@ -5,7 +5,7 @@ import { ErrorBox, Loading, Notice, PageHeader, Section } from "@/components/com
 import { Field, Select, numeric, rupeesToPaise } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { apiDelete, apiPut, errorText, useApi, type Lookthrough, type SectorsPage, type Settings } from "@/lib/api";
+import { apiDelete, apiPut, errorText, useApi, type LlmUsage, type Lookthrough, type SectorsPage, type Settings } from "@/lib/api";
 import { formatINR } from "@/lib/format";
 
 const CONC_LABELS: Record<string, { label: string; unit: "fraction" | "hhi" }> = {
@@ -26,6 +26,7 @@ export default function SettingsPage() {
       {loading && !data && <Loading />}
       {data && (
         <div className="flex flex-col gap-4">
+          <AiSettings s={data} onSaved={reload} />
           <Targets s={data} onSaved={reload} />
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Drift s={data} onSaved={reload} />
@@ -38,6 +39,10 @@ export default function SettingsPage() {
             <Themes s={data} onSaved={reload} />
           </div>
           <Emergency s={data} onSaved={reload} />
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <NewsFeeds s={data} onSaved={reload} />
+            <AlertRules s={data} onSaved={reload} />
+          </div>
           <p className="text-xs text-muted-foreground">
             Asset-class, sector and region overrides per instrument: <a className="underline" href="/classification">Classification</a>.
           </p>
@@ -360,6 +365,112 @@ function Themes({ s, onSaved }: { s: Settings; onSaved: () => void }) {
         {s.sections.themes.is_set && <Button variant="ghost" disabled={busy} onClick={reset}>Clear all</Button>}
         {feedback}
       </div>
+    </Section>
+  );
+}
+
+const MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-fable-5-1"];
+
+function AiSettings({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+  const v = s.sections.llm.value;
+  const [form, setForm] = useState({ ...v, monthly_call_cap: String(v.monthly_call_cap) });
+  const status = useApi<{ gate: string | null; usage: LlmUsage }>("/llm/status");
+  const { save, busy, feedback } = useSaver("llm", onSaved);
+  const submit = (patch: Partial<typeof form> = {}) => {
+    const f = { ...form, ...patch };
+    setForm(f);
+    save({ ...f, monthly_call_cap: Number(f.monthly_call_cap) });
+  };
+  return (
+    <Section title="AI analysis (LLM)" aside={v.outbound_enabled ? "Outbound calls allowed" : "Privacy: outbound calls OFF"}>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-1" checked={form.outbound_enabled} disabled={busy}
+               onChange={(e) => submit({ outbound_enabled: e.target.checked })} />
+        <span><b>Allow outbound LLM calls.</b> Off by default. When off, nothing is sent to any AI provider (analysis and
+          category suggestions are disabled). The API key itself lives only in <code>.env</code> (<code>ANTHROPIC_API_KEY</code>).</span>
+      </label>
+      <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <Field label="Model">
+          <Select value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })}>
+            {MODELS.map((m) => <option key={m}>{m}</option>)}
+          </Select>
+        </Field>
+        <Field label="Effort">
+          <Select value={form.effort} onChange={(e) => setForm({ ...form, effort: e.target.value })}>
+            {["low", "medium", "high", "xhigh", "max"].map((m) => <option key={m}>{m}</option>)}
+          </Select>
+        </Field>
+        <Field label="Monthly call cap"><Input inputMode="numeric" value={form.monthly_call_cap} onChange={(e) => setForm({ ...form, monthly_call_cap: e.target.value.replace(/\D/g, "") })} /></Field>
+        <Field label="$ per M input tokens"><Input inputMode="decimal" value={form.price_in_per_mtok} onChange={(e) => setForm({ ...form, price_in_per_mtok: numeric(e.target.value) })} /></Field>
+        <Field label="$ per M output tokens"><Input inputMode="decimal" value={form.price_out_per_mtok} onChange={(e) => setForm({ ...form, price_out_per_mtok: numeric(e.target.value) })} /></Field>
+      </div>
+      <label className="mt-3 flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={form.weekly_job} onChange={(e) => setForm({ ...form, weekly_job: e.target.checked })} />
+        Weekly job (Sundays): refresh analyses only for holdings with new events, within the cap
+      </label>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button disabled={busy} onClick={() => submit()}>Save AI settings</Button>
+        {feedback}
+      </div>
+      {status.data && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {status.data.gate ? `Status: ${status.data.gate}` : "Status: ready."} This month: {status.data.usage.calls_this_month}/{status.data.usage.cap} calls,
+          {" "}{status.data.usage.input_tokens.toLocaleString("en-IN")} input + {status.data.usage.output_tokens.toLocaleString("en-IN")} output tokens ≈ ${status.data.usage.estimated_cost_usd}. {status.data.usage.pricing_note}
+        </p>
+      )}
+    </Section>
+  );
+}
+
+function NewsFeeds({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+  const [feeds, setFeeds] = useState(s.sections.news.value.feeds);
+  const { save, reset, busy, feedback } = useSaver("news", onSaved);
+  return (
+    <Section title="News feeds" aside="robots.txt is checked before every fetch">
+      <div className="flex flex-col gap-2">
+        {feeds.map((f, i) => (
+          <div key={i} className="grid grid-cols-[8rem_1fr_auto] gap-2">
+            <Input value={f.name} aria-label="Feed name" onChange={(e) => setFeeds(feeds.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
+            <Input value={f.url} aria-label="Feed URL" onChange={(e) => setFeeds(feeds.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} />
+            <Button variant="ghost" size="sm" onClick={() => setFeeds(feeds.filter((_, j) => j !== i))}>Remove</Button>
+          </div>
+        ))}
+        <div><Button variant="outline" size="sm" onClick={() => setFeeds([...feeds, { name: "", url: "https://" }])}>Add feed</Button></div>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">NSE&apos;s official announcement feeds are always used. Google News RSS is attempted but its robots.txt disallows automated access, so it shows as unavailable.</p>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button disabled={busy} onClick={() => save({ feeds })}>Save feeds</Button>
+        {s.sections.news.is_set && <Button variant="ghost" disabled={busy} onClick={reset}>Reset to defaults</Button>}
+        {feedback}
+      </div>
+    </Section>
+  );
+}
+
+const CATS = ["results", "order win / contract", "dividend", "board meeting", "acquisition / merger", "regulatory / legal",
+              "management change", "rating action", "other"];
+
+function AlertRules({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+  const [r, setR] = useState(s.sections.alerts.value);
+  const { save, busy, feedback } = useSaver("alerts", onSaved);
+  const toggle = (k: "announcement" | "concentration_change" | "disclosure_stale" | "review_due") => setR({ ...r, [k]: !r[k] });
+  return (
+    <Section title="Alert rules" aside="In-app only">
+      <div className="flex flex-col gap-2 text-sm">
+        <label className="flex items-center gap-2"><input type="checkbox" checked={r.announcement} onChange={() => toggle("announcement")} />New announcement for a holding I own, in these categories:</label>
+        <div className="flex flex-wrap gap-2 pl-6">
+          {CATS.map((c) => (
+            <label key={c} className="flex items-center gap-1 text-xs">
+              <input type="checkbox" checked={r.announcement_categories.includes(c)}
+                     onChange={() => setR({ ...r, announcement_categories: r.announcement_categories.includes(c) ? r.announcement_categories.filter((x) => x !== c) : [...r.announcement_categories, c] })} />{c}
+            </label>
+          ))}
+        </div>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={r.concentration_change} onChange={() => toggle("concentration_change")} />Company / sector / overlap concentration level changed</label>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={r.disclosure_stale} onChange={() => toggle("disclosure_stale")} />A fund disclosure in use became stale</label>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={r.review_due} onChange={() => toggle("review_due")} />A thesis review date was reached</label>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3"><Button disabled={busy} onClick={() => save(r)}>Save rules</Button>{feedback}</div>
     </Section>
   );
 }

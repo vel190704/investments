@@ -5,13 +5,14 @@ import { AssetDonut } from "@/components/asset-donut";
 import { EmptyState, ErrorBox, FlagRow, Loading, Notice, PageHeader, Section, SourceNote, Stat } from "@/components/common";
 import { GrowthChart } from "@/components/growth-chart";
 import { RefreshButton } from "@/components/refresh-button";
-import { useApi, type Mappings, type Series, type Summary } from "@/lib/api";
-import { formatDate, formatINR, formatPct, signClass } from "@/lib/format";
+import { useApi, type Mappings, type NewsItem, type Series, type Summary } from "@/lib/api";
+import { formatDate, formatDateTime, formatINR, formatPct, signClass } from "@/lib/format";
 
 export default function Dashboard() {
   const { data: s, error, loading, reload } = useApi<Summary>("/portfolio/summary");
   const { data: m } = useApi<Mappings>("/mappings");
   const growth = useApi<Series>("/snapshots/series");
+  const events = useApi<NewsItem[]>("/news/recent");
 
   return (
     <>
@@ -113,6 +114,21 @@ export default function Dashboard() {
                 History builds from today: {growth.data?.points.length ?? 0} daily snapshot(s) so far. The chart appears
                 from the second day; earlier history is never estimated.
               </p>
+            )}
+          </Section>
+
+          <Section title="Recent events for my holdings" aside={<Link className="underline" href="/news">All news</Link>}>
+            {!events.data?.length ? (
+              <p className="text-sm text-muted-foreground">Nothing in the last 7 days (or news not fetched yet — Refresh on the News page).</p>
+            ) : (
+              <ul className="flex flex-col">
+                {events.data.map((n) => (
+                  <li key={n.id} className="border-b border-border py-1.5 last:border-0">
+                    <a href={n.url} target="_blank" rel="noreferrer noopener" className="text-sm hover:underline">{n.title}</a>
+                    <div className="text-xs text-muted-foreground">{n.company} · {n.category} · {n.source} · {formatDateTime(n.published_at)}</div>
+                  </li>
+                ))}
+              </ul>
             )}
           </Section>
 

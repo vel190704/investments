@@ -124,3 +124,12 @@ export function EmptyState() {
     </Notice>
   );
 }
+
+/** Footer required on analysis pages. */
+export function AnalysisFooter() {
+  return (
+    <p className="mt-6 border-t border-border pt-3 text-xs text-muted-foreground">
+      Scenario and context analysis, not a prediction or investment advice.
+    </p>
+  );
+}

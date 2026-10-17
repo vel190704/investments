@@ -9,6 +9,7 @@ const GROUPS = [
     { href: "/", label: "Dashboard" },
     { href: "/history", label: "History" },
     { href: "/changes", label: "Changes" },
+    { href: "/alerts", label: "Alerts" },
   ] },
   { title: "Holdings", links: [
     { href: "/holdings/stocks", label: "Stocks & ETFs" },
@@ -21,17 +22,23 @@ const GROUPS = [
     { href: "/sectors", label: "Sectors" },
     { href: "/overlap", label: "Fund look-through" },
     { href: "/fundamentals", label: "Fundamentals" },
+    { href: "/news", label: "News & announcements" },
+    { href: "/macro", label: "Macro & scenarios" },
+    { href: "/analysis", label: "AI analysis" },
   ] },
   { title: "Planning", links: [
     { href: "/simulator", label: "Next contribution" },
     { href: "/planner", label: "Monthly planner" },
     { href: "/projection", label: "Projection" },
     { href: "/emergency-fund", label: "Emergency fund" },
+    { href: "/journal", label: "Thesis journal" },
+    { href: "/strategy", label: "Strategy vs actual" },
   ] },
   { title: "Data", links: [
     { href: "/import", label: "Import" },
     { href: "/mappings", label: "Mappings" },
     { href: "/classification", label: "Classification" },
+    { href: "/reconcile", label: "Broker reconcile" },
     { href: "/settings", label: "Settings" },
   ] },
 ];
