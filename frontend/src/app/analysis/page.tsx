@@ -62,7 +62,7 @@ export default function AnalysisPageView() {
           {data.holdings.map((h) => (
             <Section key={h.instrument_id} title={`${h.symbol} — ${h.name}`}
                      aside={<div className="flex gap-2">
-                       <Button size="sm" variant="ghost" onClick={() => showSent(h.instrument_id, h.card, h.symbol)}>View exactly what was sent</Button>
+                       <Button size="sm" variant="ghost" onClick={() => showSent(h.instrument_id, h.card, h.symbol)}>{h.card ? "View exactly what was sent" : "Preview what would be sent"}</Button>
                        <Button size="sm" variant="outline" disabled={busy !== null || !!data.gate} onClick={() => run(h.instrument_id, !!h.card && !h.card.stale)}>
                          {busy === h.instrument_id ? "Working…" : !h.card ? "Generate" : h.card.stale ? "Update (inputs changed)" : "Refresh"}
                        </Button>

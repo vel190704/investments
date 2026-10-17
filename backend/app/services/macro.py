@@ -137,8 +137,12 @@ def sensitivities(s: Session) -> dict[str, list[str]]:
 def sensitivity_page(s: Session) -> dict:
     from app.services.lookthrough import sectors_page
 
+    from app.calc.sectors import is_equity_sector
+
     sp = sectors_page(s)
-    held = [r["sector"] for r in sp["sectors"]]
+    # only real sectors are taggable (not "Not looked through — fund", debt/cash buckets or "Unclassified")
+    held = [r["sector"] for r in sp["sectors"]
+            if is_equity_sector(r["sector"]) and not r["sector"].startswith("Unclassified")]
     ensure_starter(s, held)
     rows = {r.sector: r for r in s.scalars(select(SectorSensitivity))}
     table = [{"sector": sec, "tags": rows[sec].tags if sec in rows else [], "origin": rows[sec].origin if sec in rows else None,

@@ -164,6 +164,10 @@ def refresh_news(s: Session, client: PoliteClient | None = None, now: datetime |
                     _status(s, "Google News", rest.isin, False, str(e))
                 break
 
+    configured = set(src.NSE_FEEDS) | {f["name"] for f in (st.get(s, "news") or {}).get("feeds", [])}
+    for row in s.scalars(select(NewsSourceStatus).where(NewsSourceStatus.isin.is_(None))):
+        if row.source not in configured:
+            s.delete(row)  # a feed removed from Settings no longer shows a status
     report["pruned"] = s.execute(delete(NewsItem).where(NewsItem.published_at < cutoff)
                                  .execution_options(synchronize_session="fetch")).rowcount or 0
     s.flush()

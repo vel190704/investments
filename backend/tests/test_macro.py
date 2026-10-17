@@ -66,3 +66,26 @@ def test_starter_tags_are_labelled_and_user_edits_win(session, workbook):
     assert row.origin == "USER" and row.tags == ["rate-sensitive"]
     with pytest.raises(mc.MacroError):
         mc.set_tags(session, "Construction", ["bullish"])
+
+
+def test_sensitivity_table_lists_only_real_sectors(session, workbook):
+    from tests.test_api import PRICES
+    from app.market.base import Quote
+    from app.market.service import store_quote
+    from app.models import Instrument
+    from sqlalchemy import select
+
+    import_workbook(session, workbook)
+    for i in session.scalars(select(Instrument)):
+        if i.symbol:
+            store_quote(session, i.id, Quote(D(PRICES[i.symbol]), date(2026, 10, 16), "t", i.symbol))
+        else:
+            i.scheme_code = "1"
+            store_quote(session, i.id, Quote(D("100"), date(2026, 10, 16), "t", "1"))
+    session.flush()
+    from app.services.classification import set_overrides
+    set_overrides(session, session.scalar(select(Instrument).where(Instrument.symbol == "LT")).id, sector="Construction")
+    set_overrides(session, session.scalar(select(Instrument).where(Instrument.symbol == "SBIN")).id, sector="Financial Services")
+    page = mc.sensitivity_page(session)
+    names = [r["sector"] for r in page["table"]]
+    assert set(names) == {"Construction", "Financial Services"} and not any(n.startswith(("Not looked through", "Unclassified", "Debt, cash")) for n in names)
