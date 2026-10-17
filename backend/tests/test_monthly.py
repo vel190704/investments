@@ -43,3 +43,9 @@ def test_service_with_db(session, workbook):
     import_workbook(session, workbook)
     out = monthly_update(session)
     assert len(out["plan"]) == 3 and len(out["warnings"]) in (0, 3)  # OPENING rows are not SIPs
+
+
+def test_price_fetch_time_shown_in_ist():
+    out = checklist(TODAY, NOW, FUNDS, [], None, NOW - timedelta(hours=1), False)
+    prices = next(i for i in out["items"] if i["key"] == "prices")
+    assert prices["detail"] == "Last price fetch: 17 Oct 2026, 13:30 IST"

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from app.money import format_pct
+from app.money import format_pct, group_indian
 
 MEETS, FAILS, NA, NOT_APPLICABLE = "MEETS", "DOES NOT MEET", "N/A", "NOT APPLICABLE"
 DEFAULT_RUBRIC = {"pe_vs_peer_tolerance_pct": "0", "peg_max": "1.0", "roe_min_pct": "15", "de_max": "2.0",
@@ -13,9 +13,16 @@ DEFAULT_RUBRIC = {"pe_vs_peer_tolerance_pct": "0", "peg_max": "1.0", "roe_min_pc
 DEFAULT_SECTOR_RULES = {"Financial Services": ["debt_to_equity", "interest_coverage"]}
 
 
-def _c(key, title, status, value, rule, reason, sources=None) -> dict:
-    return {"key": key, "title": title, "status": status, "value": value, "rule": rule, "reason": reason,
-            "sources": sources or []}
+def format_crore(rupees: Decimal) -> str:
+    """Company-level rupee amount as ₹ crore with Indian grouping, e.g. -7,840 Cr -> "−₹7,840 Cr"."""
+    cr = int((abs(rupees) / Decimal(10_000_000)).quantize(Decimal(1)))
+    return f"{'−' if rupees < 0 else ''}₹{group_indian(str(cr))} Cr"
+
+
+def _c(key, title, status, value, rule, reason, sources=None, display=None) -> dict:
+    """value: plain figures (this is what the AI input carries); display: the same for people, e.g. ₹ crore."""
+    return {"key": key, "title": title, "status": status, "value": value, "display": display or value, "rule": rule,
+            "reason": reason, "sources": sources or []}
 
 
 def checks(metrics: dict[str, dict], peer_median_pe: Decimal | None, peer_note: str | None,
@@ -85,7 +92,8 @@ def checks(metrics: dict[str, dict], peer_median_pe: Decimal | None, peer_note: 
         else:
             y, val = fcf_series[-1]
             out.append(_c("fcf_positive", "FCF positive", MEETS if val > 0 else FAILS, f"{val} ({y})", "latest annual FCF > 0",
-                          f"latest FCF is {'positive' if val > 0 else 'zero or negative'}", ["annual cash-flow statement"]))
+                          f"latest FCF is {'positive' if val > 0 else 'zero or negative'}", ["annual cash-flow statement"],
+                          display=f"{format_crore(val)} ({y})"))
     if r.get("fcf_not_declining", True):
         if len(fcf_series) < 2:
             out.append(_c("fcf_not_declining", "FCF not declining", NA, None, "latest FCF ≥ previous year",
@@ -95,5 +103,5 @@ def checks(metrics: dict[str, dict], peer_median_pe: Decimal | None, peer_note: 
             ok = c >= p
             out.append(_c("fcf_not_declining", "FCF not declining", MEETS if ok else FAILS, f"{c} ({y1}) vs {p} ({y0})",
                           "latest FCF ≥ previous year", f"FCF {'did not decline' if ok else 'declined'} year on year",
-                          ["annual cash-flow statement"]))
+                          ["annual cash-flow statement"], display=f"{format_crore(c)} ({y1}) vs {format_crore(p)} ({y0})"))
     return out

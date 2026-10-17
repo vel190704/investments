@@ -362,7 +362,7 @@ export type JournalPage = {
 export type AlertItem = { id: number; rule: string; title: string; detail: string; instrument_id: number | null; created_at: string; read: boolean };
 
 // ---- Phase 5 types ----
-export type FrameworkCheck = { key: string; title: string; status: string; value: string | null; rule: string; reason: string; sources: (string | null)[] };
+export type FrameworkCheck = { key: string; title: string; status: string; value: string | null; display: string | null; rule: string; reason: string; sources: (string | null)[] };
 export type PeerComparison = {
   metric: string; mine: string | null; peer_median: string | null; median_note: string | null;
   peers: { symbol: string; value: string | null; status: string; note: string | null; as_of: string | null }[];

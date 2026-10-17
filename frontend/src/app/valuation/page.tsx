@@ -20,7 +20,7 @@ function fmt(metric: string, v: string | null | undefined): string {
   if (v === null || v === undefined) return "N/A";
   const n = Number(v);
   if (PCT.has(metric)) return `${(n * 100).toFixed(1)}%`;
-  if (metric === "fcf_latest" || metric === "fcf") return `₹${groupIndian(Math.round(n / 1e7).toString().replace("-", ""))}${n < 0 ? " (neg.)" : ""} Cr`;
+  if (metric === "fcf_latest" || metric === "fcf") return `${n < 0 ? "−" : ""}₹${groupIndian(Math.abs(Math.round(n / 1e7)).toString())} Cr`;
   if (metric === "debt_to_equity" || metric === "interest_coverage") return `${n.toFixed(2)}x`;
   return n.toFixed(2);
 }
@@ -108,7 +108,7 @@ function StockCard({ v, onSaved }: { v: StockValuation; onSaved: () => void }) {
                 {v.framework.map((c) => (
                   <tr key={c.key} className="border-t border-border align-top">
                     <td className="py-1.5 pr-2">{c.title}<div className="text-xs text-muted-foreground">{c.rule}</div></td>
-                    <td className="tnum py-1.5 pr-2 text-xs">{c.value ?? "—"}</td>
+                    <td className="tnum py-1.5 pr-2 text-xs">{c.display ?? "—"}</td>
                     <td className="py-1.5 pr-2"><span className={cn("rounded border px-1.5 py-0.5 text-xs font-semibold whitespace-nowrap", STATUS_CLS[c.status])}>{c.status}</span></td>
                     <td className="py-1.5 text-xs text-muted-foreground">{c.reason}{c.sources.filter(Boolean).length ? ` · ${c.sources.filter(Boolean).join("; ")}` : ""}</td>
                   </tr>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from app.timeutil import IST
 
 
 def month_bounds(today: date) -> tuple[date, date]:
@@ -33,7 +34,7 @@ def checklist(today: date, now: datetime, plan_funds: list[dict], month_txns: li
         {"key": "import", "title": "Import the updated workbook (preview, then confirm)", "done": imported,
          "detail": f"Last successful import: {last_import['date'].isoformat()}" if last_import else "No import yet."},
         {"key": "prices", "title": "Refresh prices and NAVs", "done": fresh,
-         "detail": f"Last price fetch: {last_price_fetch.isoformat()}" if last_price_fetch else "Prices never fetched."},
+         "detail": f"Last price fetch: {last_price_fetch.astimezone(IST):%d %b %Y, %H:%M} IST" if last_price_fetch else "Prices never fetched."},
         {"key": "snapshot", "title": "Take today's snapshot", "done": snapshot_today,
          "detail": "Stored." if snapshot_today else "No snapshot for today yet (one is stored after each refresh)."},
     ]

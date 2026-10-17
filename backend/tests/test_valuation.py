@@ -120,7 +120,7 @@ def test_framework_meets_and_fails_without_any_score():
     assert out["debt_to_equity"]["status"] == FAILS
     assert out["pe_vs_history"]["status"] == NA and "historical P/E" in out["pe_vs_history"]["reason"]
     assert out["fcf_positive"]["status"] == MEETS and out["fcf_not_declining"]["status"] == FAILS
-    assert all(set(c) == {"key", "title", "status", "value", "rule", "reason", "sources"} for c in out.values())
+    assert all(set(c) == {"key", "title", "status", "value", "display", "rule", "reason", "sources"} for c in out.values())
 
 
 def test_sector_rules_make_bank_leverage_not_applicable():
@@ -138,3 +138,19 @@ def test_rubric_thresholds_are_editable():
                                                                   "roe_min_pct": "20", "de_max": "3"}))
     assert out["pe_vs_peers"]["status"] == MEETS  # 20 <= 19 × 1.1
     assert out["peg"]["status"] == FAILS and out["roe"]["status"] == FAILS and out["debt_to_equity"]["status"] == MEETS
+
+
+def test_framework_fcf_values_are_shown_in_crore():
+    from app.calc.framework import format_crore
+
+    assert format_crore(D("-78401900000")) == "−₹7,840 Cr"
+    assert format_crore(D("1065776300000")) == "₹1,06,578 Cr"
+
+
+def test_fcf_check_value_is_plain_display_is_crore():
+    from app.calc.framework import checks
+
+    out = checks({}, None, None, None, [("2025-03-31", D("20000000")), ("2026-03-31", D("-78401900000"))], "Industrials")
+    fcf = next(c for c in out if c["key"] == "fcf_positive")
+    assert fcf["value"] == "-78401900000 (2026-03-31)"  # what the AI input carries: no ₹ formatting
+    assert fcf["display"] == "−₹7,840 Cr (2026-03-31)"

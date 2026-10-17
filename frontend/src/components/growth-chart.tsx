@@ -55,7 +55,7 @@ export function GrowthChart({ points }: { points: SeriesPoint[] }) {
             />
             {gaps.map((g) => <ReferenceLine key={g.date} x={g.date} stroke="var(--muted-foreground)" strokeDasharray="1 3" />)}
             <Line type="linear" connectNulls={false} dataKey="invested_paise" stroke={INVESTED} strokeWidth={2} strokeDasharray="5 4"
-                  dot={false} isAnimationActive={false} />
+                  dot={gaps.length ? { r: 2.5, fill: INVESTED, stroke: INVESTED } : false} isAnimationActive={false} />
             <Line type="linear" connectNulls={false} dataKey="value_paise" stroke={VALUE} strokeWidth={2} isAnimationActive={false}
                   dot={(props) => {
                     const { cx, cy, payload, index } = props as { cx: number; cy: number; payload: SeriesPoint; index: number };
