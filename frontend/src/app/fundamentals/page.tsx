@@ -11,7 +11,7 @@ import { formatDate, formatPrice, groupIndian } from "@/lib/format";
 function fmt(c: FactCell, v: string | null | undefined): string {
   if (v === null || v === undefined) return "—";
   const n = Number(v);
-  if (c.unit === "inr") return `₹${groupIndian(Math.round(n / 1e7).toString())} Cr`;
+  if (c.unit === "inr") return `${n < 0 ? "−" : ""}₹${groupIndian(Math.abs(Math.round(n / 1e7)).toString())} Cr`;
   if (c.unit === "fraction") return `${(n * 100).toFixed(c.metric === "expense_ratio" ? 2 : 1)}%`;
   if (c.metric === "debt_to_equity") return `${n.toFixed(2)}×`;
   return n.toFixed(2);
@@ -37,7 +37,7 @@ export default function FundamentalsPage() {
   }
 
   function Cell({ iid, name, c }: { iid: number; name: string; c: FactCell }) {
-    const title = c.source ? `${c.source}${c.as_of ? ` · as of ${c.as_of}` : ""}${c.fetched_at ? ` · fetched ${c.fetched_at.slice(0, 10)}` : ""}${c.note ? ` · ${c.note}` : ""}` : undefined;
+    const title = c.source ? `${c.source}${c.as_of ? ` · as of ${c.as_of}` : ""}${c.fetched_at ? ` · fetched ${c.fetched_at.slice(0, 10)}` : ""}${c.note ? ` · ${c.note}` : ""}${c.derivation ? ` · ${c.derivation}` : ""}` : undefined;
     return (
       <td className="py-1.5 pr-3 text-right align-top" title={title}>
         {c.display_na ? (
@@ -135,7 +135,7 @@ export default function FundamentalsPage() {
 
 function ManualForm({ e, onClose, onSaved }: { e: { iid: number; cell: FactCell; name: string }; onClose: () => void; onSaved: () => void }) {
   const c = e.cell;
-  const [value, setValue] = useState(c.manual ? (c.text ?? (c.unit === "fraction" ? String(Number(c.value) * 100) : c.value ?? "")) : "");
+  const [value, setValue] = useState(c.manual ? (c.text ?? (c.unit === "fraction" ? String(Number(c.value) * 100) : c.unit === "inr" && c.value ? String(Number(c.value) / 1e7) : c.value ?? "")) : "");
   const [source, setSource] = useState(c.manual && c.source ? c.source.replace(/^manual: /, "") : "");
   const [asOf, setAsOf] = useState(c.manual && c.as_of ? c.as_of : "");
   const [err, setErr] = useState<string | null>(null);
@@ -157,7 +157,8 @@ function ManualForm({ e, onClose, onSaved }: { e: { iid: number; cell: FactCell;
     <Section title={`Manual ${c.label} — ${e.name}`}>
       <form onSubmit={save} className="flex flex-col gap-3">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <Field label={c.unit === "fraction" ? `${c.label} (%)` : c.label}>
+          <Field label={c.unit === "fraction" ? `${c.label} (%)` : c.unit === "inr" ? `${c.label} (₹ crore)` : c.label}
+                 hint={c.unit === "inr" ? "Enter in ₹ crore, e.g. 1250.5; negative allowed" : undefined}>
             <Input required value={value} onChange={(x) => setValue(x.target.value)} />
           </Field>
           <Field label="Source note (required)" hint="e.g. Annual report FY2026 p.112; BSE shareholding pattern Jun 2026">

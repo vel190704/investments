@@ -5,7 +5,7 @@ import { ErrorBox, Loading, Notice, PageHeader, Section } from "@/components/com
 import { Field } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { apiGet, apiPost, apiPut, errorText, useApi, type JournalPage, type ThesisEntry } from "@/lib/api";
+import { apiGet, apiPost, apiPut, errorText, useApi, type JournalPage, type QualitativeEntry, type ThesisEntry } from "@/lib/api";
 import { formatDate, formatDateTime } from "@/lib/format";
 
 type Holding = JournalPage["holdings"][number];
@@ -40,9 +40,10 @@ export default function JournalPageView() {
               {h.asset_type === "STOCK" && <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                 <input type="checkbox" checked={h.send_to_llm}
                        onChange={async (ev) => { await apiPut(`/journal/${h.instrument_id}/optin`, { send_to_llm: ev.target.checked }); reload(); }} />
-                Include my latest thesis in AI analysis for this holding (off by default; otherwise journal text never leaves this machine)
+                Include my latest thesis and qualitative notes in AI analysis for this holding (off by default; otherwise this text never leaves this machine)
               </label>}
               {open === h.instrument_id && <Editor h={h} onSaved={reload} />}
+              {open === h.instrument_id && h.asset_type === "STOCK" && <Qualitative h={h} />}
             </Section>
           ))}
         </div>
@@ -116,6 +117,77 @@ function Editor({ h, onSaved }: { h: Holding; onSaved: () => void }) {
           {hist.map((e) => <div key={e.id} className="rounded-md border border-border p-2"><Entry e={e} /></div>)}
         </div>
       )}
+    </div>
+  );
+}
+
+function Qualitative({ h }: { h: Holding }) {
+  const { data, error, reload } = useApi<{ moat_types: string[]; history: QualitativeEntry[] }>(`/qualitative/${h.instrument_id}`);
+  const latest = data?.history[0];
+  const [moat, setMoat] = useState("");
+  const [moatNote, setMoatNote] = useState("");
+  const [capital, setCapital] = useState("");
+  const [source, setSource] = useState("");
+  const [asOf, setAsOf] = useState("");
+  const [link, setLink] = useState(true);
+  const [showAll, setShowAll] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const area = "min-h-14 rounded-lg border border-input bg-input/30 p-2 text-sm";
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      await apiPost(`/qualitative/${h.instrument_id}`, {
+        moat_type: moat, moat_note: moatNote, capital_allocation_note: capital, source_note: source, as_of: asOf,
+        thesis_entry_id: link && h.latest ? h.latest.id : null,
+      });
+      setErr(null);
+      reload();
+    } catch (x) {
+      setErr(errorText(x));
+    }
+  }
+  return (
+    <div className="mt-4 flex flex-col gap-3 border-t border-border pt-3">
+      <div className="text-sm font-medium">Qualitative notes <span className="text-xs font-normal text-muted-foreground">— append-only versions; each needs a source note and an as-of date</span></div>
+      {error && <ErrorBox message={error} />}
+      {latest ? <QualEntry q={latest} /> : <p className="text-xs text-muted-foreground">No qualitative notes yet.</p>}
+      <form onSubmit={save} className="flex flex-col gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <Field label="Moat type">
+            <select required className="h-8 rounded-lg border border-input bg-input/30 px-2 text-sm" value={moat} onChange={(e) => setMoat(e.target.value)}>
+              <option value="" disabled>Choose…</option>
+              {data?.moat_types.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </Field>
+          <Field label="Source note"><Input required placeholder="e.g. FY26 annual report, p. 12" value={source} onChange={(e) => setSource(e.target.value)} /></Field>
+          <Field label="As of"><Input required type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>
+        </div>
+        <Field label="Moat note"><textarea required className={area} value={moatNote} onChange={(e) => setMoatNote(e.target.value)} /></Field>
+        <Field label="Capital-allocation note"><textarea required className={area} value={capital} onChange={(e) => setCapital(e.target.value)} /></Field>
+        {h.latest && <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input type="checkbox" checked={link} onChange={(e) => setLink(e.target.checked)} /> Link to thesis version {h.latest.version}
+        </label>}
+        {err && <ErrorBox message={err} />}
+        <div className="flex gap-2">
+          <Button type="submit" variant="outline">Save as version {(data?.history.length ?? 0) + 1}</Button>
+          {(data?.history.length ?? 0) > 1 && <Button type="button" variant="ghost" onClick={() => setShowAll(!showAll)}>{showAll ? "Hide" : "Show"} earlier versions</Button>}
+        </div>
+      </form>
+      {showAll && data?.history.slice(1).map((q) => <div key={q.id} className="rounded-md border border-border p-2"><QualEntry q={q} /></div>)}
+    </div>
+  );
+}
+
+function QualEntry({ q }: { q: QualitativeEntry }) {
+  return (
+    <div className="flex flex-col gap-1 text-sm">
+      <p><span className="text-xs text-muted-foreground">Moat ({q.moat_type}): </span>{q.moat_note}</p>
+      <p><span className="text-xs text-muted-foreground">Capital allocation: </span>{q.capital_allocation_note}</p>
+      <p className="text-xs text-muted-foreground">
+        Source: {q.source_note} · as of {formatDate(q.as_of)} · version {q.version}, {formatDateTime(q.created_at)}
+        {q.thesis_entry_id ? ` · linked thesis entry #${q.thesis_entry_id}` : ""}
+      </p>
     </div>
   );
 }

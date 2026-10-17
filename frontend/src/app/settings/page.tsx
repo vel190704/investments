@@ -35,6 +35,10 @@ export default function SettingsPage() {
           <Concentration s={data} onSaved={reload} />
           <HealthThresholds s={data} onSaved={reload} />
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <Rubric s={data} onSaved={reload} />
+            <SectorRules s={data} onSaved={reload} />
+          </div>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <SectorRanges s={data} onSaved={reload} />
             <Themes s={data} onSaved={reload} />
           </div>
@@ -369,31 +373,32 @@ function Themes({ s, onSaved }: { s: Settings; onSaved: () => void }) {
   );
 }
 
-const MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-fable-5-1"];
-
 function AiSettings({ s, onSaved }: { s: Settings; onSaved: () => void }) {
   const v = s.sections.llm.value;
-  const [form, setForm] = useState({ ...v, monthly_call_cap: String(v.monthly_call_cap) });
+  const [form, setForm] = useState({
+    ...v, model: v.model ?? "", price_in_per_mtok: v.price_in_per_mtok ?? "", price_out_per_mtok: v.price_out_per_mtok ?? "",
+    monthly_call_cap: String(v.monthly_call_cap),
+  });
   const status = useApi<{ gate: string | null; usage: LlmUsage }>("/llm/status");
+  const page = useApi<{ settings: { model: string } }>("/analysis");
   const { save, busy, feedback } = useSaver("llm", onSaved);
   const submit = (patch: Partial<typeof form> = {}) => {
     const f = { ...form, ...patch };
     setForm(f);
-    save({ ...f, monthly_call_cap: Number(f.monthly_call_cap) });
+    save({ ...f, model: f.model.trim() || null, monthly_call_cap: Number(f.monthly_call_cap),
+           price_in_per_mtok: f.price_in_per_mtok || null, price_out_per_mtok: f.price_out_per_mtok || null });
   };
   return (
     <Section title="AI analysis (LLM)" aside={v.outbound_enabled ? "Outbound calls allowed" : "Privacy: outbound calls OFF"}>
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" className="mt-1" checked={form.outbound_enabled} disabled={busy}
                onChange={(e) => submit({ outbound_enabled: e.target.checked })} />
-        <span><b>Allow outbound LLM calls.</b> Off by default. When off, nothing is sent to any AI provider (analysis and
-          category suggestions are disabled). The API key itself lives only in <code>.env</code> (<code>ANTHROPIC_API_KEY</code>).</span>
+        <span><b>Allow outbound LLM calls.</b> Off by default. When off, nothing is sent to any AI provider. The API key lives only in
+          <code> .env</code> (<code>ANTHROPIC_API_KEY</code>).</span>
       </label>
       <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <Field label="Model">
-          <Select value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })}>
-            {MODELS.map((m) => <option key={m}>{m}</option>)}
-          </Select>
+        <Field label="Model id" hint={`In use: ${page.data?.settings.model ?? "…"} (blank = CLAUDE_MODEL from .env)`}>
+          <Input placeholder="e.g. claude-opus-5-5" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value.trim() })} />
         </Field>
         <Field label="Effort">
           <Select value={form.effort} onChange={(e) => setForm({ ...form, effort: e.target.value })}>
@@ -401,12 +406,18 @@ function AiSettings({ s, onSaved }: { s: Settings; onSaved: () => void }) {
           </Select>
         </Field>
         <Field label="Monthly call cap"><Input inputMode="numeric" value={form.monthly_call_cap} onChange={(e) => setForm({ ...form, monthly_call_cap: e.target.value.replace(/\D/g, "") })} /></Field>
-        <Field label="$ per M input tokens"><Input inputMode="decimal" value={form.price_in_per_mtok} onChange={(e) => setForm({ ...form, price_in_per_mtok: numeric(e.target.value) })} /></Field>
-        <Field label="$ per M output tokens"><Input inputMode="decimal" value={form.price_out_per_mtok} onChange={(e) => setForm({ ...form, price_out_per_mtok: numeric(e.target.value) })} /></Field>
+        <Field label="$ per M input tokens" hint="no default"><Input inputMode="decimal" placeholder="not set" value={form.price_in_per_mtok} onChange={(e) => setForm({ ...form, price_in_per_mtok: numeric(e.target.value) })} /></Field>
+        <Field label="$ per M output tokens" hint="no default"><Input inputMode="decimal" placeholder="not set" value={form.price_out_per_mtok} onChange={(e) => setForm({ ...form, price_out_per_mtok: numeric(e.target.value) })} /></Field>
       </div>
-      <label className="mt-3 flex items-center gap-2 text-sm">
+      <p className="mt-1 text-xs text-status-moderate">Prices are only used for the cost estimate. Verify them against the provider&apos;s pricing page for the model you use.</p>
+      <label className="mt-3 flex items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-1" checked={form.refusal_fallback} onChange={(e) => setForm({ ...form, refusal_fallback: e.target.checked })} />
+        <span>Refusal fallback (default off): if the model declines a request, let the provider re-run it on its recommended fallback
+          model. When a different model answers, the card says which one.</span>
+      </label>
+      <label className="mt-2 flex items-center gap-2 text-sm">
         <input type="checkbox" checked={form.weekly_job} onChange={(e) => setForm({ ...form, weekly_job: e.target.checked })} />
-        Weekly job (Sundays): refresh analyses only for holdings with new events, within the cap
+        Weekly job (Sundays): refresh stock analyses only for holdings with new events, within the cap
       </label>
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <Button disabled={busy} onClick={() => submit()}>Save AI settings</Button>
@@ -415,9 +426,73 @@ function AiSettings({ s, onSaved }: { s: Settings; onSaved: () => void }) {
       {status.data && (
         <p className="mt-2 text-xs text-muted-foreground">
           {status.data.gate ? `Status: ${status.data.gate}` : "Status: ready."} This month: {status.data.usage.calls_this_month}/{status.data.usage.cap} calls,
-          {" "}{status.data.usage.input_tokens.toLocaleString("en-IN")} input + {status.data.usage.output_tokens.toLocaleString("en-IN")} output tokens ≈ ${status.data.usage.estimated_cost_usd}. {status.data.usage.pricing_note}
+          {" "}{status.data.usage.input_tokens.toLocaleString("en-IN")} input + {status.data.usage.output_tokens.toLocaleString("en-IN")} output tokens
+          {status.data.usage.estimated_cost_usd ? ` ≈ $${status.data.usage.estimated_cost_usd}` : ""}. {status.data.usage.pricing_note}
         </p>
       )}
+    </Section>
+  );
+}
+
+const RULE_METRICS = ["debt_to_equity", "interest_coverage", "peg", "roe", "pe_vs_peers", "fcf_positive", "fcf_not_declining"];
+
+function Rubric({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+  const [r, setR] = useState(s.sections.rubric.value);
+  const { save, reset, busy, feedback } = useSaver("rubric", onSaved);
+  const num = (k: "pe_vs_peer_tolerance_pct" | "peg_max" | "roe_min_pct" | "de_max", label: string) => (
+    <Field label={label}><Input inputMode="decimal" value={r[k]} onChange={(e) => setR({ ...r, [k]: numeric(e.target.value) })} /></Field>
+  );
+  return (
+    <Section title="Valuation framework rubric" aside={s.sections.rubric.is_set ? "Custom" : "Defaults"}>
+      <p className="mb-3 text-xs text-muted-foreground">Each check is shown as meets / does not meet / N/A. There is no overall score or verdict.</p>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {num("pe_vs_peer_tolerance_pct", "P/E ≤ peer median + tolerance (%)")}
+        {num("peg_max", "PEG below")}
+        {num("roe_min_pct", "ROE above (%)")}
+        {num("de_max", "Debt/equity below")}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-4 text-sm">
+        <label className="flex items-center gap-2"><input type="checkbox" checked={r.fcf_positive} onChange={(e) => setR({ ...r, fcf_positive: e.target.checked })} />FCF positive</label>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={r.fcf_not_declining} onChange={(e) => setR({ ...r, fcf_not_declining: e.target.checked })} />FCF not declining (latest ≥ previous year)</label>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button disabled={busy} onClick={() => save(r)}>Save rubric</Button>
+        {s.sections.rubric.is_set && <Button variant="ghost" disabled={busy} onClick={reset}>Reset to defaults</Button>}
+        {feedback}
+      </div>
+    </Section>
+  );
+}
+
+function SectorRules({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+  const [rows, setRows] = useState(() => Object.entries(s.sections.sector_rules.value).map(([sector, m]) => ({ sector, metrics: m })));
+  const { save, reset, busy, feedback } = useSaver("sector_rules", onSaved);
+  return (
+    <Section title="Sector rules" aside="Checks shown as “not applicable for this sector”">
+      <div className="flex flex-col gap-2">
+        {rows.map((row, i) => (
+          <div key={i} className="flex flex-col gap-1 rounded-md border border-border p-2">
+            <div className="flex gap-2">
+              <Input value={row.sector} placeholder="Sector (as shown on Sectors)" onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, sector: e.target.value } : x))} />
+              <Button variant="ghost" size="sm" onClick={() => setRows(rows.filter((_, j) => j !== i))}>Remove</Button>
+            </div>
+            <div className="flex flex-wrap gap-3 text-xs">
+              {RULE_METRICS.map((m) => (
+                <label key={m} className="flex items-center gap-1">
+                  <input type="checkbox" checked={row.metrics.includes(m)}
+                         onChange={() => setRows(rows.map((x, j) => j === i ? { ...x, metrics: x.metrics.includes(m) ? x.metrics.filter((y) => y !== m) : [...x.metrics, m] } : x))} />{m}
+                </label>
+              ))}
+            </div>
+          </div>
+        ))}
+        <div><Button variant="outline" size="sm" onClick={() => setRows([...rows, { sector: "", metrics: [] }])}>Add sector</Button></div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button disabled={busy || rows.some((x) => !x.sector.trim())} onClick={() => save(Object.fromEntries(rows.map((x) => [x.sector.trim(), x.metrics])))}>Save sector rules</Button>
+        {s.sections.sector_rules.is_set && <Button variant="ghost" disabled={busy} onClick={reset}>Reset to defaults</Button>}
+        {feedback}
+      </div>
     </Section>
   );
 }

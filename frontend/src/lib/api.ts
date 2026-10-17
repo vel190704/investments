@@ -140,10 +140,10 @@ export type InstrumentRef = {
   scheme_code: string | null;
 };
 export type SeriesPoint = {
-  date: string; value_paise: number; invested_paise: number; invested_priced_paise: number;
-  partial: boolean; unpriced: string[];
+  date: string; value_paise: number | null; invested_paise: number | null; invested_priced_paise: number | null;
+  partial: boolean; unpriced: string[]; gap?: boolean; reason?: string;
 };
-export type Series = { points: SeriesPoint[]; enough_history: boolean; note: string | null };
+export type Series = { points: SeriesPoint[]; enough_history: boolean; note: string | null; gaps?: string[] };
 export type Snapshot = {
   snapshot_date: string; total_value_paise: number; total_invested_paise: number; invested_priced_paise: number;
   partial: boolean; unpriced: string[]; trigger: string; updated_at: string;
@@ -193,8 +193,12 @@ export type Settings = {
     sector_ranges: SettingsSection<Record<string, { min: string; max: string }> | null>;
     themes: SettingsSection<Record<string, string[]> | null>;
     health: SettingsSection<Record<string, Record<string, string>>>;
-    llm: SettingsSection<{ outbound_enabled: boolean; model: string; monthly_call_cap: number; weekly_job: boolean;
-                           price_in_per_mtok: string; price_out_per_mtok: string; effort: string }>;
+    llm: SettingsSection<{ outbound_enabled: boolean; model: string | null; monthly_call_cap: number; weekly_job: boolean;
+                           price_in_per_mtok: string | null; price_out_per_mtok: string | null; effort: string;
+                           refusal_fallback: boolean }>;
+    rubric: SettingsSection<{ pe_vs_peer_tolerance_pct: string; peg_max: string; roe_min_pct: string; de_max: string;
+                              fcf_positive: boolean; fcf_not_declining: boolean }>;
+    sector_rules: SettingsSection<Record<string, string[]>>;
     news: SettingsSection<{ feeds: { name: string; url: string }[] }>;
     alerts: SettingsSection<{ announcement: boolean; announcement_categories: string[]; concentration_change: boolean;
                               disclosure_stale: boolean; review_due: boolean }>;
@@ -266,7 +270,7 @@ export type Classification = { asset_classes: string[]; instruments: Classificat
 export type FactCell = {
   metric: string; label: string; unit: "inr" | "ratio" | "fraction" | "text"; manual_allowed: boolean;
   value: string | null; text: string | null; display_na: string | null; origin: string | null; manual?: boolean;
-  source?: string | null; as_of?: string | null; fetched_at?: string | null; note?: string | null;
+  source?: string | null; as_of?: string | null; fetched_at?: string | null; note?: string | null; derivation?: string | null;
   portfolio_sector_median?: string | null;
 };
 export type Fundamentals = {
@@ -330,20 +334,21 @@ export type MacroPage = {
 };
 export type Statement = { text: string; citations: string[] };
 export type AnalysisCard = {
-  id: number; status: "OK" | "FAILED"; model: string; prompt_version: string; created_at: string; data_as_of: string | null;
+  id: number; kind: "stock" | "fund" | "portfolio"; status: "OK" | "FAILED"; model: string; requested_model: string | null;
+  fallback_used: boolean; prompt_version: string; created_at: string; data_as_of: string | null;
   attempts: number; input_tokens: number; output_tokens: number; stale: boolean; errors: string[];
-  analysis?: {
-    valuation_context: Statement[]; business_quality: Statement[]; key_risks: Statement[]; macro_sensitivity: Statement[];
-    what_would_change_this_view: Statement[]; data_gaps: Statement[];
-    scenarios: { scenario: string; direction: string; because: string; citations: string[]; sentence: string }[];
+  analysis?: Record<string, Statement[]> & {
+    scenarios?: { scenario: string; direction: string; because: string; citations: string[]; sentence: string }[];
   };
 };
 export type LlmUsage = { calls_this_month: number; cap: number; input_tokens: number; output_tokens: number;
-                         estimated_cost_usd: string; pricing_note: string };
+                         estimated_cost_usd: string | null; pricing_note: string };
+export type AnalysisHolding = { instrument_id: number; symbol: string | null; name: string; card: AnalysisCard | null };
 export type AnalysisPage = {
-  holdings: { instrument_id: number; symbol: string; name: string; card: AnalysisCard | null }[];
+  holdings: AnalysisHolding[]; funds: AnalysisHolding[]; portfolio: { card: AnalysisCard | null };
   gate: string | null; usage: LlmUsage; funds_note: string;
-  settings: { outbound_enabled: boolean; model: string; effort: string; monthly_call_cap: number; weekly_job: boolean };
+  settings: { outbound_enabled: boolean; model: string; effort: string; monthly_call_cap: number; weekly_job: boolean;
+              refusal_fallback: boolean };
 };
 export type ThesisEntry = {
   id: number; instrument_id: number; version: number; why: string; change_view: string; horizon: string;
@@ -355,6 +360,33 @@ export type JournalPage = {
   review_due: (ThesisEntry & { name: string })[]; note: string;
 };
 export type AlertItem = { id: number; rule: string; title: string; detail: string; instrument_id: number | null; created_at: string; read: boolean };
+
+// ---- Phase 5 types ----
+export type FrameworkCheck = { key: string; title: string; status: string; value: string | null; rule: string; reason: string; sources: (string | null)[] };
+export type PeerComparison = {
+  metric: string; mine: string | null; peer_median: string | null; median_note: string | null;
+  peers: { symbol: string; value: string | null; status: string; note: string | null; as_of: string | null }[];
+};
+export type HistoryRow = {
+  fiscal_year_end: string; roe: string | null; net_margin: string | null; fcf: string | null; fcf_margin: string | null;
+  eps: string | null; pe: { value: string | null; reason: string | null; price_date?: string; price?: string; eps?: string };
+};
+export type StockValuation = {
+  instrument_id: number; symbol: string; name: string; sector: string;
+  metrics: Record<string, { value: string | null; source: string | null; as_of: string | null; reason: string | null; note?: string | null }>;
+  framework: FrameworkCheck[]; peers: { symbols: string[]; note: string | null; label: string; comparisons: PeerComparison[] };
+  history: HistoryRow[]; own_hist_pe_median: string | null; notes: string[];
+};
+export type ValuationPage = { stocks: StockValuation[]; rubric: Record<string, string | boolean>; sector_rules: Record<string, string[]> };
+export type MonthlyUpdate = {
+  month: string; from: string; to: string; done: number; total: number; warnings: string[];
+  items: { key: string; title: string; done: boolean; detail: string }[];
+  plan: { name: string; monthly_amount_paise: number }[]; how_to: string[];
+};
+export type SourceHealth = { sources: { source: string; last_success: string | null; last_failure: string | null; last_error: string | null;
+  last_message: string | null; history: { date: string; status: "ok" | "failed" | "mixed" | "none"; events: number }[] }[]; note: string };
+export type QualitativeEntry = { id: number; instrument_id: number; version: number; moat_type: string; moat_note: string;
+  capital_allocation_note: string; source_note: string; as_of: string; thesis_entry_id: number | null; created_at: string };
 
 // ---- fetch helpers ----
 export class ApiError extends Error {}

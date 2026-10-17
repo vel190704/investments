@@ -8,22 +8,40 @@ import { apiPost, useApi, type ImportReport, type ImportRun } from "@/lib/api";
 import { formatDateTime, formatINR } from "@/lib/format";
 
 type UploadResult = { report: ImportReport; text: string; resolution: { summary: string } | null };
+type PreviewResult = { token: string; file_name: string; report: ImportReport & { transactions: ImportReport["transactions"] & {
+  added_rows: { row: number; date: string; type: string; name: string; quantity: string | null; amount_paise: number }[];
+  removed_rows: { id: number; date: string; type: string; name: string; quantity: string | null; amount_paise: number; source_row: number | null }[];
+} } };
 
 export default function ImportPage() {
   const runs = useApi<ImportRun[]>("/import/runs");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<UploadResult | null>(null);
+  const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function upload() {
     if (!file) return;
     setBusy(true);
     setError(null);
+    setResult(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
-      setResult(await apiPost<UploadResult>("/import", fd));
+      setPreview(await apiPost<PreviewResult>("/import/preview", fd));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function confirm() {
+    if (!preview) return;
+    setBusy(true);
+    try {
+      setResult(await apiPost<UploadResult>("/import/confirm", { token: preview.token }));
+      setPreview(null);
       void runs.reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -48,13 +66,15 @@ export default function ImportPage() {
               className="text-sm file:mr-3 file:rounded-md file:border file:border-border file:bg-muted file:px-3 file:py-1.5 file:text-sm file:text-foreground"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />
-            <Button onClick={upload} disabled={!file || busy}>{busy ? "Importing…" : "Import"}</Button>
+            <Button onClick={upload} disabled={!file || busy}>{busy && !preview ? "Checking…" : "Preview"}</Button>
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            CLI alternative: <code>cd backend && .venv/bin/python -m app.import_excel ../data/your_file.xlsx</code>
+            Nothing is saved until you confirm the preview. CLI: <code>make import FILE=…</code> (add <code>--dry-run</code> via
+            <code> .venv/bin/python -m app.import_excel FILE --dry-run</code> to preview).
           </p>
         </Section>
         {error && <ErrorBox message={error} />}
+        {preview && <Preview p={preview} busy={busy} onConfirm={confirm} onCancel={() => setPreview(null)} />}
         {result && <Report r={result.report} resolution={result.resolution?.summary} />}
 
         <Section title="Import history">
@@ -141,5 +161,39 @@ function Count({ label, value, sub }: { label: string; value: number | string; s
       <div className="tnum text-lg font-semibold">{value}</div>
       {sub && <div className="text-xs text-muted-foreground">{sub}</div>}
     </div>
+  );
+}
+
+function Preview({ p, busy, onConfirm, onCancel }: { p: PreviewResult; busy: boolean; onConfirm: () => void; onCancel: () => void }) {
+  const t = p.report.transactions;
+  if (p.report.fatal.length) return <ErrorBox message={`Cannot import: ${p.report.fatal.join("; ")}`} />;
+  return (
+    <Section title={`Preview — ${p.file_name}`} aside="Nothing has been saved yet">
+      <div className="flex flex-col gap-3 text-sm">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Count label="Rows to add" value={t.added_rows.length} />
+          <Count label="Rows to remove (excel only)" value={t.removed_rows.length} />
+          <Count label="Already in-app entries" value={t.matched_ui.length} />
+          <Count label="Rows with errors" value={t.errors.length} />
+        </div>
+        {t.added_rows.length > 0 && (
+          <div><div className="mb-1 text-xs font-medium text-muted-foreground">To add</div>
+            <ul className="tnum text-xs">{t.added_rows.map((r) => <li key={r.row}>row {r.row}: {r.date} {r.type} {r.name} {r.quantity ?? ""} · {formatINR(r.amount_paise)}</li>)}</ul></div>
+        )}
+        {t.removed_rows.length > 0 && (
+          <div><div className="mb-1 text-xs font-medium text-status-high">To remove (no longer in the file; in-app entries are never removed)</div>
+            <ul className="tnum text-xs">{t.removed_rows.map((r) => <li key={r.id}>{r.date} {r.type} {r.name} {r.quantity ?? ""} · {formatINR(r.amount_paise)} (was excel row {r.source_row})</li>)}</ul></div>
+        )}
+        {t.errors.length > 0 && (
+          <div><div className="mb-1 text-xs font-medium text-destructive">Errors (these rows will be skipped; nothing is removed while errors exist)</div>
+            <ul className="text-xs text-destructive">{t.errors.map((e, i) => <li key={i}>row {e.row}{e.field ? ` [${e.field}]` : ""}: {e.message}</li>)}</ul></div>
+        )}
+        {t.added_rows.length === 0 && t.removed_rows.length === 0 && t.errors.length === 0 && <Notice>No changes: the database already matches this file.</Notice>}
+        <div className="flex gap-2">
+          <Button onClick={onConfirm} disabled={busy}>{busy ? "Applying…" : "Confirm import"}</Button>
+          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+        </div>
+      </div>
+    </Section>
   );
 }

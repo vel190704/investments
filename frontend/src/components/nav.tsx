@@ -22,6 +22,7 @@ const GROUPS = [
     { href: "/sectors", label: "Sectors" },
     { href: "/overlap", label: "Fund look-through" },
     { href: "/fundamentals", label: "Fundamentals" },
+    { href: "/valuation", label: "Valuation & peers" },
     { href: "/news", label: "News & announcements" },
     { href: "/macro", label: "Macro & scenarios" },
     { href: "/analysis", label: "AI analysis" },
@@ -35,9 +36,11 @@ const GROUPS = [
     { href: "/strategy", label: "Strategy vs actual" },
   ] },
   { title: "Data", links: [
+    { href: "/monthly", label: "Monthly update" },
     { href: "/import", label: "Import" },
     { href: "/mappings", label: "Mappings" },
     { href: "/classification", label: "Classification" },
+    { href: "/sources", label: "Source health" },
     { href: "/settings", label: "Settings" },
   ] },
 ];
