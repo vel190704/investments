@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app import repository as repo
 from app.llm import prompts
-from app.llm.inputs import InputError, build_input, data_as_of, input_hash
+from app.llm.inputs import InputError, build_fund_input, build_input, build_portfolio_input, data_as_of, input_hash
 from app.llm.provider import AnthropicProvider, LLMProvider, LLMUnavailable
 from app.llm.validate import validate
 from app.models import LlmAnalysis, LlmCall, NewsItem
@@ -62,12 +62,19 @@ def default_provider(s: Session) -> LLMProvider:
 
 
 def _log(s: Session, purpose: str, model: str, ok: bool, tin: int = 0, tout: int = 0, error: str | None = None) -> None:
+    from app.services.source_health import record
+
     s.add(LlmCall(purpose=purpose, model=model, ok=ok, input_tokens=tin, output_tokens=tout, error=error))
     s.flush()
+    provider_ok = ok or (error is not None and not error.startswith(("Could not reach", "Anthropic API error",
+                                                                      "Rate limited", "The Anthropic API key")))
+    record(s, "LLM provider", provider_ok, f"{purpose} via {model}" + (f": {error[:300]}" if error else ""))
 
 
-def _latest(s: Session, iid: int) -> LlmAnalysis | None:
-    return s.scalar(select(LlmAnalysis).where(LlmAnalysis.instrument_id == iid).order_by(LlmAnalysis.id.desc()).limit(1))
+def _latest(s: Session, iid: int | None, kind: str = "stock") -> LlmAnalysis | None:
+    q = select(LlmAnalysis).where(LlmAnalysis.kind == kind)
+    q = q.where(LlmAnalysis.instrument_id.is_(None)) if iid is None else q.where(LlmAnalysis.instrument_id == iid)
+    return s.scalar(q.order_by(LlmAnalysis.id.desc()).limit(1))
 
 
 def card(a: LlmAnalysis | None, current_hash: str | None = None) -> dict | None:
@@ -81,20 +88,20 @@ def card(a: LlmAnalysis | None, current_hash: str | None = None) -> dict | None:
            "stale": current_hash is not None and a.input_hash != current_hash, "errors": a.errors if a.status != "OK" else []}
     if a.status == "OK":
         o = a.output_json
-        out["analysis"] = {**{k: o[k] for k in prompts.STATEMENT_SECTIONS},
-                           "scenarios": [{**x, "sentence": prompts.render_scenario(x)} for x in o["scenarios"]]}
+        spec = prompts.KINDS[a.kind or "stock"]
+        out["analysis"] = {k: o[k] for k in spec["sections"]}
+        if spec["scenarios"]:
+            out["analysis"]["scenarios"] = [{**x, "sentence": prompts.render_scenario(x)} for x in o["scenarios"]]
     return out
 
 
-def analyze(s: Session, iid: int, refresh: bool = False, provider: LLMProvider | None = None,
-            today=None) -> dict:
-    today = today or today_ist()
-    cfg = st.get(s, "llm")
-    inp = build_input(s, iid, today)
+def _run(s: Session, kind: str, iid: int | None, inp: dict, refresh: bool, provider: LLMProvider | None) -> dict:
+    spec = prompts.KINDS[kind]
     model = provider.model if provider else st.llm_model(s)
-    h = input_hash(inp, model, prompts.PROMPT_VERSION)
-    cached = s.scalar(select(LlmAnalysis).where(LlmAnalysis.instrument_id == iid, LlmAnalysis.input_hash == h)
-                      .order_by(LlmAnalysis.id.desc()).limit(1))
+    h = input_hash({"kind": kind, **inp}, model, prompts.PROMPT_VERSION)
+    q = select(LlmAnalysis).where(LlmAnalysis.kind == kind, LlmAnalysis.input_hash == h)
+    q = q.where(LlmAnalysis.instrument_id.is_(None)) if iid is None else q.where(LlmAnalysis.instrument_id == iid)
+    cached = s.scalar(q.order_by(LlmAnalysis.id.desc()).limit(1))
     if cached and not refresh:
         return {"cached": True, "card": card(cached, h)}
     reason = gate(s)
@@ -112,37 +119,61 @@ def analyze(s: Session, iid: int, refresh: bool = False, provider: LLMProvider |
         if attempts > 1 and gate(s):
             break  # the cap may be hit between attempts
         try:
-            c = provider.complete_json(prompts.SYSTEM_PROMPT, messages, prompts.OUTPUT_SCHEMA)
+            c = provider.complete_json(spec["system"], messages, spec["schema"])
         except LLMUnavailable as e:
-            _log(s, "analysis", provider.model, False, error=str(e))
+            _log(s, kind, provider.model, False, error=str(e))
             errors = [str(e)]
             break
         tin, tout, served = tin + c.input_tokens, tout + c.output_tokens, c.model
-        data, errors = validate(c.text, inp)
-        _log(s, "analysis", c.model, data is not None, c.input_tokens, c.output_tokens,
+        data, errors = validate(c.text, inp, kind)
+        _log(s, kind, c.model, data is not None, c.input_tokens, c.output_tokens,
              None if data else "; ".join(errors)[:2000])
         if data is not None:
             break
         messages = messages + [{"role": "assistant", "content": c.text},
                                {"role": "user", "content": "Your JSON failed validation:\n- " + "\n- ".join(errors)
                                 + "\nReturn corrected JSON that follows every rule."}]
-    a = LlmAnalysis(instrument_id=iid, input_hash=h, input_json=inp, output_json=data, status="OK" if data else "FAILED",
-                    errors=errors if not data else [], model=served, requested_model=provider.model,
-                    prompt_version=prompts.PROMPT_VERSION,
-                    data_as_of=data_as_of(inp), attempts=attempts, input_tokens=tin, output_tokens=tout)
+    a = LlmAnalysis(kind=kind, instrument_id=iid, input_hash=h, input_json=inp, output_json=data,
+                    status="OK" if data else "FAILED", errors=errors if not data else [], model=served,
+                    requested_model=provider.model, prompt_version=prompts.PROMPT_VERSION, data_as_of=data_as_of(inp),
+                    attempts=attempts, input_tokens=tin, output_tokens=tout)
     s.add(a)
     s.flush()
     return {"cached": False, "card": card(a, h)}
 
 
-def preview(s: Session, iid: int) -> dict:
+def analyze(s: Session, iid: int, refresh: bool = False, provider: LLMProvider | None = None, today=None) -> dict:
+    return _run(s, "stock", iid, build_input(s, iid, today or today_ist()), refresh, provider)
+
+
+def analyze_fund(s: Session, iid: int, refresh: bool = False, provider: LLMProvider | None = None, today=None) -> dict:
+    return _run(s, "fund", iid, build_fund_input(s, iid, today or today_ist()), refresh, provider)
+
+
+def analyze_portfolio(s: Session, refresh: bool = False, provider: LLMProvider | None = None, today=None) -> dict:
+    return _run(s, "portfolio", None, build_portfolio_input(s, today or today_ist()), refresh, provider)
+
+
+def _builder(kind: str):
+    return {"stock": lambda s, iid: build_input(s, iid, today_ist()),
+            "fund": lambda s, iid: build_fund_input(s, iid, today_ist()),
+            "portfolio": lambda s, iid: build_portfolio_input(s, today_ist())}[kind]
+
+
+def preview(s: Session, iid: int | None, kind: str = "stock") -> dict:
     """Exactly what would be sent (system prompt + input), without calling anything."""
-    cfg = st.get(s, "llm")
-    inp = build_input(s, iid, today_ist())
+    inp = _builder(kind)(s, iid)
     model = st.llm_model(s)
-    return {"model": model, "prompt_version": prompts.PROMPT_VERSION, "system": prompts.SYSTEM_PROMPT,
-            "input": inp, "output_schema": prompts.OUTPUT_SCHEMA,
-            "input_hash": input_hash(inp, model, prompts.PROMPT_VERSION)}
+    return {"kind": kind, "model": model, "prompt_version": prompts.PROMPT_VERSION, "system": prompts.KINDS[kind]["system"],
+            "input": inp, "output_schema": prompts.KINDS[kind]["schema"],
+            "input_hash": input_hash({"kind": kind, **inp}, model, prompts.PROMPT_VERSION)}
+
+
+def _hash_now(s: Session, kind: str, iid: int | None) -> str | None:
+    try:
+        return input_hash({"kind": kind, **_builder(kind)(s, iid)}, st.llm_model(s), prompts.PROMPT_VERSION)
+    except InputError:
+        return None
 
 
 def cards(s: Session) -> dict:
@@ -150,20 +181,18 @@ def cards(s: Session) -> dict:
 
     rows, _ = load_rows(s)
     cfg = st.get(s, "llm")
-    out = []
+    out, funds = [], []
     for r in rows:
-        if r.inst.asset_type != "STOCK":
-            continue
-        try:
-            h = input_hash(build_input(s, r.inst.id, today_ist()), st.llm_model(s), prompts.PROMPT_VERSION)
-        except InputError:
-            h = None
-        latest = _latest(s, r.inst.id)
-        out.append({"instrument_id": r.inst.id, "symbol": r.inst.symbol, "name": r.inst.name,
-                    "card": card(latest, h)})
-    return {"holdings": out, "gate": gate(s), "settings": {**{k: cfg.get(k) for k in (
+        if r.inst.asset_type == "STOCK":
+            out.append({"instrument_id": r.inst.id, "symbol": r.inst.symbol, "name": r.inst.name,
+                        "card": card(_latest(s, r.inst.id, "stock"), _hash_now(s, "stock", r.inst.id))})
+        elif r.inst.asset_type == "MF":
+            funds.append({"instrument_id": r.inst.id, "symbol": None, "name": r.inst.name,
+                          "card": card(_latest(s, r.inst.id, "fund"), _hash_now(s, "fund", r.inst.id))})
+    portfolio = {"card": card(_latest(s, None, "portfolio"), _hash_now(s, "portfolio", None))}
+    return {"holdings": out, "funds": funds, "portfolio": portfolio, "gate": gate(s), "settings": {**{k: cfg.get(k) for k in (
                 "outbound_enabled", "effort", "monthly_call_cap", "weekly_job", "refusal_fallback")}, "model": st.llm_model(s)},
-            "usage": usage(s), "funds_note": "AI analysis covers direct stocks only."}
+            "usage": usage(s), "funds_note": "Stock cards for direct stocks; fund cards for mutual funds; one optional portfolio summary."}
 
 
 def suggest_categories(s: Session, provider: LLMProvider | None = None, limit: int = 20) -> dict:

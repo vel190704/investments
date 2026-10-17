@@ -1,6 +1,6 @@
 """System prompt and output schema for per-holding scenario analysis. Bump PROMPT_VERSION on any change."""
 
-PROMPT_VERSION = "2026-10-17.1"
+PROMPT_VERSION = "2026-10-17.2"
 SCENARIOS = ["rate_cut", "rate_rise", "weaker_rupee", "higher_crude", "sector_regulation", "demand_slowdown"]
 DIRECTIONS = ["upward pressure", "downward pressure", "mixed", "unclear"]
 SCENARIO_LABELS = {"rate_cut": "a rate cut", "rate_rise": "a rate rise", "weaker_rupee": "a weaker rupee",
@@ -70,3 +70,36 @@ Choose exactly one category from the allowed list; use "other" when none fits.""
 def render_scenario(item: dict) -> str:
     return (f"If {SCENARIO_LABELS[item['scenario']]} happens, the likely direction of pressure on this holding is "
             f"{item['direction']}, because {item['because'].rstrip('.')}.")
+
+
+# ---------------- fund cards
+FUND_SECTIONS = ["cost_and_tracking", "concentration", "sector_tilts", "overlap", "key_risks",
+                 "what_would_change_this_view", "data_gaps"]
+FUND_SCHEMA = {
+    "type": "object",
+    "properties": {k: {"type": "array", "items": STATEMENT} for k in FUND_SECTIONS},
+    "required": FUND_SECTIONS,
+    "additionalProperties": False,
+}
+FUND_SYSTEM_PROMPT = """You write context analysis about one mutual fund held in a private, single-user portfolio-analytics tool. Use only the JSON input. Cite the ids of the input values behind every statement. Copy numbers exactly from the input or use none; never compute, round or estimate.
+
+Follow the input's "focus" list: for index funds discuss tracking difference, cost and concentration in the top constituents; for active funds discuss concentration, sector tilts and overlap with the investor's other holdings. If disclosure data is missing or stale, say so in data_gaps.
+
+Never judge the fund (no "good", "bad", "best", "worst"), never predict returns or prices, and never suggest holding, switching, buying, selling or changing an allocation. Keep each statement to one or two plain sentences."""
+
+# ---------------- portfolio summary card
+PORTFOLIO_SECTIONS = ["summary", "data_gaps"]
+PORTFOLIO_SCHEMA = {
+    "type": "object",
+    "properties": {k: {"type": "array", "items": STATEMENT} for k in PORTFOLIO_SECTIONS},
+    "required": PORTFOLIO_SECTIONS,
+    "additionalProperties": False,
+}
+PORTFOLIO_SYSTEM_PROMPT = """Summarise, factually, what the portfolio flags in the JSON input show: concentration (including look-through through funds), allocation drift, sector exposure and the health dimensions. Use only the input; cite input ids for every statement; copy numbers exactly or use none. Do not give advice, do not recommend any action, do not predict anything, and do not rank or score the portfolio. List missing inputs in data_gaps."""
+
+KINDS = {
+    "stock": {"system": SYSTEM_PROMPT, "schema": OUTPUT_SCHEMA, "sections": STATEMENT_SECTIONS, "scenarios": True},
+    "fund": {"system": FUND_SYSTEM_PROMPT, "schema": FUND_SCHEMA, "sections": FUND_SECTIONS, "scenarios": False},
+    "portfolio": {"system": PORTFOLIO_SYSTEM_PROMPT, "schema": PORTFOLIO_SCHEMA, "sections": PORTFOLIO_SECTIONS,
+                  "scenarios": False},
+}

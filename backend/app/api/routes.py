@@ -769,12 +769,14 @@ def analysis_run(iid: int, refresh: bool = False, session: Session = Depends(get
 
 
 @router.get("/analysis/{iid}/preview")
-def analysis_preview(iid: int, session: Session = Depends(get_session)):
+def analysis_preview(iid: int, kind: str = "stock", session: Session = Depends(get_session)):
     from app.llm.inputs import InputError
     from app.services.analysis import preview
 
+    if kind not in ("stock", "fund"):
+        raise HTTPException(422, "kind must be stock or fund")
     try:
-        return preview(session, iid)
+        return preview(session, iid, kind)
     except InputError as e:
         raise HTTPException(422, str(e)) from None
 
@@ -906,3 +908,128 @@ def monthly_update_view(session: Session = Depends(get_session)):
     from app.services.monthly import monthly_update
 
     return monthly_update(session)
+
+
+@router.get("/valuation")
+def valuation_all(session: Session = Depends(get_session)):
+    from app.services.valuation import overview
+
+    return overview(session)
+
+
+@router.get("/valuation/{iid}")
+def valuation_one(iid: int, session: Session = Depends(get_session)):
+    from app.services.valuation import stock_view
+
+    if repo.get_instrument(session, iid) is None:
+        raise HTTPException(404, "instrument not found")
+    return stock_view(session, iid)
+
+
+class PeersIn(BaseModel):
+    symbols: list[str]
+    note: str | None = None
+
+
+@router.put("/peers/{iid}")
+def peers_set(iid: int, body: PeersIn, session: Session = Depends(get_session)):
+    from app.services.valuation import PeerError, set_peers
+
+    try:
+        row = set_peers(session, iid, body.symbols, body.note)
+    except PeerError as e:
+        raise HTTPException(422, str(e)) from None
+    return {"symbols": row.symbols, "note": row.note}
+
+
+@router.post("/peers/refresh")
+def peers_refresh(session: Session = Depends(get_session)):
+    from app.services.valuation import refresh
+
+    return refresh(session, own=False)
+
+
+@router.get("/qualitative/{iid}")
+def qualitative_history(iid: int, session: Session = Depends(get_session)):
+    from app.services.qualitative import MOAT_TYPES, history
+
+    return {"moat_types": MOAT_TYPES, "history": history(session, iid)}
+
+
+class QualIn(BaseModel):
+    moat_type: str
+    moat_note: str
+    capital_allocation_note: str
+    source_note: str
+    as_of: str
+    thesis_entry_id: int | None = None
+
+
+@router.post("/qualitative/{iid}", status_code=201)
+def qualitative_add(iid: int, body: QualIn, session: Session = Depends(get_session)):
+    from datetime import date as _date
+
+    from app.services.qualitative import QualitativeError, add
+
+    try:
+        d = _date.fromisoformat(body.as_of)
+    except ValueError:
+        raise HTTPException(422, "as_of must be YYYY-MM-DD") from None
+    try:
+        return add(session, iid, body.moat_type, body.moat_note, body.capital_allocation_note, body.source_note, d,
+                   body.thesis_entry_id)
+    except QualitativeError as e:
+        raise HTTPException(422, str(e)) from None
+
+
+def _llm_call(fn):
+    from app.llm.inputs import InputError
+    from app.llm.provider import LLMUnavailable
+
+    try:
+        return fn()
+    except InputError as e:
+        raise HTTPException(422, str(e)) from None
+    except LLMUnavailable as e:
+        raise HTTPException(409, str(e)) from None
+
+
+@router.post("/analysis/fund/{iid}")
+def analysis_fund(iid: int, refresh: bool = False, session: Session = Depends(get_session)):
+    from app.services.analysis import analyze_fund
+
+    out = _llm_call(lambda: analyze_fund(session, iid, refresh=refresh))
+    return out
+
+
+@router.post("/analysis/portfolio")
+def analysis_portfolio(refresh: bool = False, session: Session = Depends(get_session)):
+    from app.services.analysis import analyze_portfolio
+
+    return _llm_call(lambda: analyze_portfolio(session, refresh=refresh))
+
+
+@router.get("/analysis/portfolio/preview")
+def analysis_portfolio_preview(session: Session = Depends(get_session)):
+    from app.services.analysis import preview
+
+    return _llm_call(lambda: preview(session, None, "portfolio"))
+
+
+@router.get("/analysis/sent/{aid}")
+def analysis_sent_any(aid: int, session: Session = Depends(get_session)):
+    from app.llm.prompts import KINDS
+    from app.models import LlmAnalysis
+
+    a = session.get(LlmAnalysis, aid)
+    if a is None:
+        raise HTTPException(404, "analysis not found")
+    return {"kind": a.kind, "model": a.model, "requested_model": a.requested_model, "prompt_version": a.prompt_version,
+            "system": KINDS[a.kind]["system"], "input": a.input_json}
+
+
+@router.get("/source-health")
+def source_health_view(session: Session = Depends(get_session)):
+    from app.services.source_health import summary
+
+    return {"sources": summary(session), "note": "Last 30 days, one cell per day: ok / failed / mixed / none."}

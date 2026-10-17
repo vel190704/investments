@@ -12,7 +12,7 @@ import json
 import re
 from decimal import Decimal, InvalidOperation
 
-from app.llm.prompts import DIRECTIONS, OUTPUT_SCHEMA, SCENARIOS, STATEMENT_SECTIONS
+from app.llm.prompts import DIRECTIONS, KINDS, SCENARIOS
 
 NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)*")
 BANNED = [
@@ -33,6 +33,12 @@ BANNED = [
     (r"\bmultibagger\b", "multibagger"),
     (r"\bguarantee(d|s)?\b", "guarantee"),
     (r"\brecommend(s|ed|ation)?\b", "recommendation"),
+    (r"\bswitch(es|ed|ing)?\b", "switch"),
+    (r"\b(good|bad|great|poor|best|worst|ideal|excellent|terrible) (fund|choice|investment|pick|option|stock)\b",
+     "good/bad judgement"),
+    (r"\b(fund|stock|investment) is (good|bad|great|poor|the best|the worst)\b", "good/bad judgement"),
+    (r"\breturns? (will|should|are expected to|is expected to|are likely to|is likely to)\b", "return prediction"),
+    (r"\b(expected|likely|projected) returns?\b", "return prediction"),
 ]
 
 
@@ -82,17 +88,19 @@ def input_numbers(obj) -> set[str]:
     return out
 
 
-def _schema_errors(data) -> list[str]:
+def _schema_errors(data, kind: str = "stock") -> list[str]:
     errs = []
     if not isinstance(data, dict):
         return ["output is not a JSON object"]
-    want = set(OUTPUT_SCHEMA["required"])
+    spec = KINDS[kind]
+    sections = spec["sections"]
+    want = set(spec["schema"]["required"])
     extra, missing = set(data) - want, want - set(data)
     if extra:
         errs.append(f"unexpected keys: {sorted(extra)}")
     if missing:
         errs.append(f"missing keys: {sorted(missing)}")
-    for sec in STATEMENT_SECTIONS:
+    for sec in sections:
         items = data.get(sec, [])
         if not isinstance(items, list):
             errs.append(f"{sec} must be a list")
@@ -102,6 +110,8 @@ def _schema_errors(data) -> list[str]:
                 errs.append(f"{sec}[{i}] must have exactly text and citations")
             elif not isinstance(it["text"], str) or not it["text"].strip() or not isinstance(it["citations"], list):
                 errs.append(f"{sec}[{i}] has an empty text or non-list citations")
+    if not spec["scenarios"]:
+        return errs
     sc = data.get("scenarios", [])
     if not isinstance(sc, list):
         errs.append("scenarios must be a list")
@@ -119,20 +129,23 @@ def _schema_errors(data) -> list[str]:
     return errs
 
 
-def validate(output_text: str, input_obj: dict) -> tuple[dict | None, list[str]]:
+def validate(output_text: str, input_obj: dict, kind: str = "stock") -> tuple[dict | None, list[str]]:
     try:
         data = json.loads(output_text)
     except (json.JSONDecodeError, TypeError) as e:
         return None, [f"(d) not valid JSON: {e}"]
-    errors = [f"(d) schema: {e}" for e in _schema_errors(data)]
+    spec = KINDS[kind]
+    sections = spec["sections"]
+    errors = [f"(d) schema: {e}" for e in _schema_errors(data, kind)]
     if errors:
         return None, errors
 
     ids = collect_ids(input_obj)
     allowed_numbers = input_numbers(input_obj)
-    statements = [(f"{sec}[{i}]", it["text"], it["citations"]) for sec in STATEMENT_SECTIONS
+    statements = [(f"{sec}[{i}]", it["text"], it["citations"]) for sec in sections
                   for i, it in enumerate(data[sec])]
-    statements += [(f"scenarios[{i}]", it["because"], it["citations"]) for i, it in enumerate(data["scenarios"])]
+    if spec["scenarios"]:
+        statements += [(f"scenarios[{i}]", it["because"], it["citations"]) for i, it in enumerate(data["scenarios"])]
     for where, text, cites in statements:
         if not cites:
             errors.append(f"(c) {where} has no citation")
