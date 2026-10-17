@@ -71,6 +71,18 @@ def write_workbook(path: Path, txn_rows=None, fallback_rows=None, plan_rows=None
     return path
 
 
+@pytest.fixture(autouse=True)
+def isolate_from_dotenv(monkeypatch):
+    """Tests never see the developer's real secrets or model choice from .env."""
+    from app.config import get_settings
+
+    st = get_settings()
+    monkeypatch.setattr(st, "anthropic_api_key", "")
+    if hasattr(st, "claude_model"):
+        monkeypatch.setattr(st, "claude_model", "")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+
 @pytest.fixture
 def session(tmp_path):
     db.configure(f"sqlite:///{tmp_path / 'test.db'}")
