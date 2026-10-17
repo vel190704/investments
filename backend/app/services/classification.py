@@ -138,6 +138,15 @@ def refresh_classification(s: Session) -> dict:
                 report["funds"].append(f"{i.name}: {sch.category}")
         except Exception as e:
             report["errors"].append(f"AMFI NAVAll.txt unavailable: {e}")
+    from app.services.source_health import record
+
+    errs = " ".join(report["errors"])
+    if stocks:
+        record(s, "NSE index lists", "NSE index lists unavailable" not in errs, f"{len(report['stocks_classified'])} classified")
+    if etfs:
+        record(s, "NSE securities lists", "NSE ETF list unavailable" not in errs, f"{len(report['etfs'])} ETFs")
+    if funds:
+        record(s, "AMFI NAVAll", "AMFI NAVAll.txt unavailable" not in errs, f"{len(report['funds'])} categories")
     s.flush()
     report["summary"] = (f"{len(report['stocks_classified'])} stocks classified, "
                          f"{len(report['stocks_unclassified'])} not in NSE lists, {len(report['etfs'])} ETFs, "

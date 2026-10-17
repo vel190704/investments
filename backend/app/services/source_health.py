@@ -11,7 +11,7 @@ from app.models import SourceEvent
 from app.timeutil import IST, as_utc, today_ist, utcnow
 
 SOURCES = ["yfinance prices", "AMFI NAVAll", "NSE securities lists", "NSE index lists", "yfinance fundamentals",
-           "yfinance peers", "yfinance macro", "NSE announcements", "News feeds", "LLM provider"]
+           "yfinance peers", "yfinance macro", "NSE announcements", "LLM provider"]  # + "News feed: <name>" rows
 RETENTION_DAYS = 90
 
 

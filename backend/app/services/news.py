@@ -130,6 +130,9 @@ def refresh_news(s: Session, client: PoliteClient | None = None, now: datetime |
         if t and it.published_at >= cutoff:
             _store(s, t, it, report)
     report["sources"]["NSE"] = {"items": len(items), "errors": errors}
+    from app.services.source_health import record
+
+    record(s, "NSE announcements", not errors, f"{len(items)} items" + (f"; {next(iter(errors.values()))}" if errors else ""))
 
     # 2) Publisher market feeds — matched by company name / NSE symbol in the headline
     patterns = {t.isin: nc.company_patterns(t.name, t.symbol) for t in tracked}
@@ -137,8 +140,10 @@ def refresh_news(s: Session, client: PoliteClient | None = None, now: datetime |
         try:
             feed_items = src.fetch_publisher(client, feed["name"], feed["url"])
             _status(s, feed["name"], None, True, f"ok ({len(feed_items)} items)")
+            record(s, f"News feed: {feed['name']}", True, f"{len(feed_items)} items")
         except (SourceUnavailable, ValueError) as e:
             _status(s, feed["name"], None, False, str(e))
+            record(s, f"News feed: {feed['name']}", False, str(e))
             report["sources"][feed["name"]] = {"error": str(e)}
             continue
         matched = 0
@@ -159,6 +164,7 @@ def refresh_news(s: Session, client: PoliteClient | None = None, now: datetime |
         except (SourceUnavailable, ValueError) as e:
             _status(s, "Google News", t.isin, False, str(e))
             report["sources"]["Google News"] = {"error": str(e)}
+            record(s, "News feed: Google News", False, str(e))
             if "robots.txt" in str(e):  # same answer for every query; don't ask again this run
                 for rest in tracked:
                     _status(s, "Google News", rest.isin, False, str(e))

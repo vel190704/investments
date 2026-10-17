@@ -51,6 +51,10 @@ def refresh_macro(s: Session, fetch=None) -> dict:
         except Exception as e:  # keep the last good value? No: mark unavailable, never show stale as current
             row.value, row.as_of, row.status, row.note = None, None, "UNAVAILABLE", f"{type(e).__name__}: {e}"
             report[key] = f"unavailable: {e}"
+    from app.services.source_health import record
+
+    bad = [k for k, v in report.items() if v != "ok"]
+    record(s, "yfinance macro", len(bad) < len(report), "all ok" if not bad else f"unavailable: {', '.join(bad)}")
     s.flush()
     return report
 

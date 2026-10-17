@@ -60,6 +60,16 @@ def refresh_prices(s: Session, trigger: str = "manual", providers: list[PricePro
             else:
                 results.append({"instrument_id": r.instrument_id, "name": r.name, "ok": False, "source": p.name,
                                 "error": res.message})
+    from app.services.source_health import record
+
+    for p in providers:
+        mine = [r for r in results if r["source"] == p.name]
+        if mine:
+            ok = [r for r in mine if r["ok"]]
+            hard = [r for r in mine if not r["ok"] and "not confirmed" not in (r.get("error") or "")]
+            label = "AMFI NAVAll" if "AMFI" in p.name else "yfinance prices"
+            record(s, label, bool(ok) or not hard, f"{len(ok)} ok, {len(mine) - len(ok)} unavailable"
+                   + (f"; e.g. {hard[0]['error'][:200]}" if hard else ""))
     run.results = results
     run.ok_count = sum(1 for r in results if r["ok"])
     run.error_count = len(results) - run.ok_count

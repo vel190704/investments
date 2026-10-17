@@ -88,12 +88,21 @@ def list_snapshots(s: Session) -> list[PortfolioSnapshot]:
 
 
 def series(s: Session) -> dict:
+    """Snapshot points plus explicit gap points (value None) for dates the app was not running."""
+    from app.models import SnapshotGap
+
     snaps = list_snapshots(s)
+    pts = [{"date": p.snapshot_date.isoformat(), "value_paise": p.total_value_paise,
+            "invested_paise": p.total_invested_paise, "invested_priced_paise": p.invested_priced_paise,
+            "partial": bool(p.unpriced), "unpriced": p.unpriced, "gap": False} for p in snaps]
+    have = {p["date"] for p in pts}
+    gaps = [g for g in s.scalars(select(SnapshotGap).order_by(SnapshotGap.gap_date)) if g.gap_date.isoformat() not in have]
+    pts += [{"date": g.gap_date.isoformat(), "value_paise": None, "invested_paise": None, "invested_priced_paise": None,
+             "partial": False, "unpriced": [], "gap": True, "reason": g.reason} for g in gaps]
+    pts.sort(key=lambda p: p["date"])
     return {
-        "points": [{"date": p.snapshot_date.isoformat(), "value_paise": p.total_value_paise,
-                    "invested_paise": p.total_invested_paise, "invested_priced_paise": p.invested_priced_paise,
-                    "partial": bool(p.unpriced), "unpriced": p.unpriced} for p in snaps],
-        "enough_history": len(snaps) >= 2,
+        "points": pts, "gaps": [g.gap_date.isoformat() for g in gaps],
+        "enough_history": len(snaps) >= 2,  # gaps never count as history
         "note": None if len(snaps) >= 2 else
         "History builds from today: one snapshot is stored per day after each price refresh. "
         "No earlier history is estimated or back-filled.",

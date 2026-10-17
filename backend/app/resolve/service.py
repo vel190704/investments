@@ -47,6 +47,8 @@ def resolve_identifiers(s: Session) -> dict:
                                     "underlying": sec.underlying, "list_fetched_at": fetched.isoformat()})
         except Exception as e:
             errors.append(f"NSE securities lists unavailable: {e}")
+            from app.services.source_health import record
+            record(s, "NSE securities lists", False, str(e)[:300])
     if needs_scheme:
         try:
             schemes, fetched = amfi_schemes()
@@ -63,6 +65,8 @@ def resolve_identifiers(s: Session) -> dict:
                                         "list_fetched_at": fetched.isoformat()})
         except Exception as e:
             errors.append(f"AMFI NAVAll.txt unavailable: {e}")
+            from app.services.source_health import record
+            record(s, "AMFI NAVAll", False, str(e)[:300])
     s.flush()
     pending = sum(1 for c in repo.candidates(s) if c.status == "PENDING")
     return {"created": created, "errors": errors, "pending": pending,

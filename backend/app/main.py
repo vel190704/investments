@@ -15,10 +15,22 @@ log = logging.getLogger(__name__)
 
 
 def _startup_refresh() -> None:
+    """Catch up after downtime (prices + today's snapshot + honest gaps), else refresh if quotes are stale."""
+    from sqlalchemy import func, select
+
     from app.market.service import refresh_if_stale
+    from app.models import Instrument
+    from app.services.catchup import catch_up
+    from app.timeutil import today_ist
 
     try:
         with session_scope() as s:
+            if not s.scalar(select(func.count()).select_from(Instrument)):
+                return
+            res = catch_up(s, today_ist())
+            if res["ran"]:
+                log.info("Start-up catch-up: gaps %s, refresh %s", res["gaps_recorded"], res["refresh"])
+                return
             res = refresh_if_stale(s, get_settings().startup_refresh_max_age_hours)
         if res:
             log.info("Start-up refresh: %s ok, %s errors", res["ok_count"], res["error_count"])

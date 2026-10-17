@@ -75,7 +75,7 @@ def parse_rss(xml_text: str, source: str, kind: str) -> list[RawItem]:
             continue
         hint = None
         if kind == "EXCHANGE":
-            m = re.search(r"/corporate/([A-Z0-9&\-]+?)_", link)
+            m = re.search(r"/corporate/(?:xbrl/)?([A-Z0-9&\-]+?)_", link)
             hint = m.group(1) if m else None
         desc = _clean(it.findtext("description"))
         if kind == "EXCHANGE" and desc and "|SUBJECT:" in desc.replace(" |SUBJECT:", "|SUBJECT:"):
