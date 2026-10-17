@@ -3,8 +3,8 @@
 Single-user, local-first portfolio analytics and planning tool for an Indian retail investor.
 It **never places orders**. Excel workbook = source of truth for transactions.
 
-Status: Phases 0–4 done (§10 = Phase 2, §11 = Phase 3, §12 = Phase 4). Phase 5 (§13) in progress:
-Excel-only workflow, hygiene, valuation framework, peers, qualitative notes, fund/portfolio AI cards, reliability.
+Status: Phases 0–5 done (§10 = Phase 2, §11 = Phase 3, §12 = Phase 4, §13 = Phase 5: Excel-only
+workflow, hygiene, valuation framework, peers, qualitative notes, fund/portfolio AI cards, reliability).
 
 ---
 
@@ -951,3 +951,11 @@ manual override needs a source note and an as-of date.
 5. The model name and token prices are user settings; the app ships no prices.
 6. `CLAUDE_MODEL` in `.env` sets the default model (`claude-sonnet-5` in this `.env`); a model
    chosen in Settings overrides it.
+7. FCF is Yahoo's reported "Free Cash Flow" line from the annual cash-flow statement; when the
+   line is missing, FCF is N/A (not recomputed from other lines). For banks it is shown but rarely meaningful; add
+   `fcf_positive`/`fcf_not_declining` to the Financial Services sector rule if you agree.
+8. Because PEG uses quarterly YoY growth, a quarter with near-zero growth gives a very large PEG
+   (seen on 2026-10-17: ASHOKLEY 1% → PEG 25). It is shown as computed, with its inputs; values
+   above 100 are N/A (implausible).
+9. ROE is Yahoo's `returnOnEquity`; when Yahoo omits it, it stays N/A (not recomputed from
+   statements). Own history shows per-year ROE from statements separately.

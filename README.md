@@ -18,6 +18,18 @@ Phase 4 adds:
 - a thesis journal;
 - in-app alerts.
 
+Phase 5 adds:
+- an import preview (dry run) and a **Monthly update** checklist;
+- a valuation framework (P/S, PEG, FCF, interest coverage) checked against **your** rubric,
+  with peers you choose and the company's own history;
+- versioned qualitative notes (moat, capital allocation);
+- AI cards for funds and an optional portfolio summary;
+- a **Source health** page and honest snapshot gaps after downtime.
+
+**Excel is the only input for holdings and transactions.** The app never connects to a broker
+or platform account; you copy figures from Groww/Coin into the workbook (or the in-app form)
+and import. The AI works only from what you import.
+
 It **never places orders**, has no login, and binds only to `127.0.0.1`.
 *Personal analytics tool, not investment advice.*
 
@@ -29,9 +41,15 @@ It **never places orders**, has no login, and binds only to `127.0.0.1`.
 Requirements: Python 3.12+ (developed on 3.14), Node 20+, `make`.
 
 ```bash
-make setup          # backend/.venv + pip install, frontend npm install
+make setup          # backend/.venv + pip install, frontend npm install, git pre-commit hook
 cp .env.example .env   # optional — defaults work without it
 ```
+
+`make setup` points git at `.githooks/`. Its pre-commit hook:
+- refuses staged lines that look like an API key, and any `.env*` file except `.env.example`;
+- runs `make check` and blocks the commit if anything fails.
+
+Never put secrets in `.env.example` (it is tracked); they belong in `.env` (git-ignored).
 
 ## Run
 
@@ -73,6 +91,22 @@ make migrate        # apply migrations now (backs up first)
 5. Open **Settings** to enter your target allocation, review the projection rates (they ship as
    placeholders), and fill in the emergency fund. Nothing there is assumed for you.
 
+## Monthly routine (Excel is the only input)
+
+The **Monthly update** page is a checklist whose ticks come from your data, not from
+checkboxes:
+
+1. **Add this month's SIP rows.** In Coin, open each SIP order and note the units and NAV. Add a
+   row to the `transactions` sheet (date, SIP, MF, the fund name exactly as before, units,
+   NAV, amount), or use *Transactions › Add transaction*. The amount is authoritative.
+   - A warning appears for every `monthly_plan` fund without a SIP row dated in the current
+     month.
+2. **Add any new stock/ETF buys** (from Groww's order history) the same way.
+3. **Import** the workbook on the Import page. You see a preview first; nothing changes until
+   you click Confirm.
+4. **Refresh prices and NAVs** (button on the dashboard, or `make refresh`).
+5. **Take today's snapshot.** Every refresh stores one; the History page also has a button.
+
 ## Pages
 
 | page | what it shows |
@@ -81,6 +115,7 @@ make migrate        # apply migrations now (backs up first)
 | History | growth chart (value vs invested), snapshot list, "Take snapshot" |
 | Changes | change log (transactions, quantity/avg-cost, allocation) and compare snapshot A vs B or today |
 | Stocks & ETFs / Mutual funds | holdings tables with source, as-of date and XIRR |
+| Monthly update | this month's checklist (SIP rows, buys, import, prices, snapshot) with missing-SIP warnings |
 | Transactions | all rows with their source; add BUY/SIP/SELL/DIVIDEND; delete in-app rows; export to Excel |
 | Allocation | asset classes, drift vs targets (tolerance band), XIRR by class, concentration, "not held" info |
 | Next contribution | one-off amount: before → after per scenario |
@@ -90,12 +125,14 @@ make migrate        # apply migrations now (backs up first)
 | Portfolio health | separate dimensions with reasons: company (look-through), sector, drift, overlap, international, liquidity, volatility, emergency fund |
 | Sectors | sector exposure incl. funds, HHI and largest sector, geography, your desired ranges and themes |
 | Fund look-through | upload AMC disclosures / index weights; total company exposure (direct + via funds); pairwise overlap |
-| Fundamentals | per-stock metrics from Yahoo Finance with source/date; manual ROCE, promoter holding, alpha; fund facts |
+| Fundamentals | per-stock metrics from Yahoo Finance with source/date (P/S, PEG, FCF, coverage show their formula on hover); manual values incl. FCF in ₹ crore; fund facts |
+| Valuation & peers | your rubric per stock (meets / does not meet / N/A / not applicable, no score), peers you chose vs their median, own annual history |
 | Classification | override asset class (e.g. Gold, Debt/Cash), sector and region per instrument |
 | News & announcements | NSE official announcement feeds + allowed publisher feeds, rule-categorised, sorted by your look-through exposure |
 | Macro & scenarios | USD/INR, Brent, Nifty 50 (automated); repo rate, CPI (manual); sector sensitivity tags; exposure by tag |
-| AI analysis | per-stock scenario/context cards (optional, guardrailed, cached), with "View exactly what was sent" |
-| Thesis journal / Strategy vs actual | append-only theses with review dates; stated targets/theses next to what changed |
+| AI analysis | stock, fund and portfolio-summary cards (optional, guardrailed, cached), with "View exactly what was sent" and the model that answered |
+| Thesis journal / Strategy vs actual | append-only theses and qualitative notes (moat, capital allocation) with review dates; stated targets/theses next to what changed |
+| Source health | per data source: last success, last failure and error, a 30-day strip |
 | Alerts | in-app alerts from rules you toggle in Settings |
 | Import / Mappings / Settings | data management |
 
@@ -120,7 +157,13 @@ make test           # backend pytest (calculations, importer, idempotency, XIRR,
                     # planner, projection, emergency-fund isolation, snapshots, change log, migrations, API)
                     # + frontend INR-formatting tests
 make lint           # eslint + tsc
+make check          # everything the pre-commit hook runs: backend tests, frontend tests, lint, typecheck
 ```
+
+`make` runs recipes with `bash -euo pipefail`, so a failing step can never be hidden behind a
+pipe. Network and LLM calls are always mocked in tests. Parser regression tests replay trimmed
+real responses recorded on 2026-10-17 (`backend/tests/fixtures/`: Yahoo statements and prices,
+AMFI NAVAll, an NSE sector list and an NSE announcements feed; no personal data).
 
 ## Excel format
 
@@ -166,8 +209,18 @@ Used only for an instrument that has no rows in `transactions` (treated as an OP
 
 ## Re-importing
 
-Edit the workbook, then run `make import` again or upload it on the Import page. Imports are
-idempotent:
+Edit the workbook, then upload it on the Import page or run `make import` again.
+
+On the Import page, the upload is a **preview** (a dry run inside a transaction that is
+always rolled back). It lists:
+- rows to add;
+- rows to remove (only workbook rows; in-app rows are never removed);
+- rows with errors.
+
+Click **Confirm** to apply exactly that file; the preview token is tied to the file's hash and
+works once. From the command line, `--dry-run` prints the same preview without saving.
+
+Imports are idempotent:
 - Unchanged rows are recognised and not duplicated.
 - New rows are added, and edited notes are updated in place.
 - Rows you deleted from the workbook are removed from the database, but only when the file has
@@ -180,6 +233,7 @@ import history.
 
 ```bash
 make import FILE=data/another_file.xlsx
+cd backend && .venv/bin/python -m app.import_excel ../data/file.xlsx --dry-run      # preview only
 cd backend && .venv/bin/python -m app.import_excel ../data/file.xlsx --no-resolve   # offline
 ```
 
@@ -242,46 +296,137 @@ Only holdings with a **confirmed ISIN** (Mappings) are tracked. For funds, news 
 top 5 holdings by your look-through exposure, never generic fund news. Items older than 90
 days are deleted.
 
-## AI analysis: API key, privacy toggle, what is sent
+## Valuation framework, rubric and peers
 
-1. Put `ANTHROPIC_API_KEY=...` in `.env` and restart the backend.
+**Valuation & peers** shows, per stock:
+- **P/S**; **PEG** = P/E ÷ (earnings growth × 100), with the formula and inputs shown. PEG is
+  N/A (with the reason) when there is no P/E, or growth is missing, zero/negative or
+  implausible. The growth figure is Yahoo's `earningsGrowth` (latest quarter, year on year).
+- **FCF** (latest fiscal year and trend), FCF margin, FCF yield and interest coverage, from
+  Yahoo's annual statements.
+- Any of these can be entered manually on Fundamentals, with a required source note and
+  as-of date (FCF in ₹ crore). Manual values are tagged "manual".
+
+**Framework check.** Each rule in your rubric is shown as *meets / does not meet / N/A /
+not applicable*, with the value and its source. There is no overall score, ranking or verdict.
+Interest coverage is shown for context only.
+
+**Settings › Rubric** holds the thresholds. Defaults:
+- P/E at or below the peer median (tolerance 0%) and at or below its own historical median;
+- PEG below 1.0;
+- ROE above 15%;
+- D/E below 2.0;
+- FCF positive and not declining.
+
+The thresholds are editable; the two FCF rules can also be switched off. To exclude a metric
+for a whole sector, use sector rules.
+
+**Settings › Sector rules** lists metrics that are *not applicable* per sector. The default
+marks debt/equity and interest coverage as not applicable for Financial Services. Add a sector
+(the exact name shown on the Sectors page) and tick metrics to extend it.
+
+**Peers.** Open a stock's *Details*, type up to 8 NSE symbols and a "why these peers" note,
+then **Save peers**. Nothing is suggested or seeded. Click **Refresh fundamentals & peers**
+to fetch the same metrics for them.
+- Peer fetches are rate-limited (1 s apart) and cached for 24 h.
+- The comparison is labelled "peers chosen by me".
+- A median needs at least 3 peers with a value; otherwise it is N/A.
+
+**Own history** comes only from the annual statements Yahoo provides (usually four years).
+A historical P/E appears only when a stored price within 7 days of a fiscal year end exists;
+otherwise it is N/A. History is never estimated.
+
+## AI analysis: API key, model, privacy toggle, what is sent
+
+1. Put `ANTHROPIC_API_KEY=...` in `.env` (never in `.env.example`) and restart the backend.
+   Optionally set `CLAUDE_MODEL=...` there too.
 2. In **Settings › AI analysis**, tick **Allow outbound LLM calls**. It is off by default; while
    it is off, nothing is sent anywhere. You can also set:
-   - the model (default `claude-opus-5-5`);
-   - effort;
-   - a monthly call cap (default 30);
-   - token prices, used for the cost estimate;
-   - the optional weekly job.
-3. On **AI analysis**, click **Generate** for a stock. Results are cached by a hash of the
-   inputs; a call is made again only when the inputs change or you click Refresh.
+   - the **model id** (free text). If it is empty, `CLAUDE_MODEL` from `.env` is used, and
+     failing that `claude-opus-5-5`;
+   - **input/output prices per million tokens**. The app ships none, so the cost shows N/A
+     until you enter them. Verify them against the provider's pricing page;
+   - **refusal fallback** (off by default). When on, a refused request may be answered by
+     another model. The card then shows "Answered by X (fallback — you requested Y)";
+   - effort, a monthly call cap (default 30) and the optional weekly job.
+3. On **AI analysis**, click **Generate** on a stock, a fund or the optional **Portfolio
+   summary**. Results are cached by a hash of the inputs, the model and the prompt version; a
+   call is made again only when one of these changes or you click Refresh.
 
 **Sent** (per stock):
 - company name, NSE symbol and sector;
 - your portfolio weight and look-through exposure as **percentages**;
 - fundamentals as displayed, with source/as-of, and "N/A" kept as N/A;
 - "within my portfolio" medians;
+- framework results, PEG/P-S/FCF/coverage, the peer comparison and own history, each with an id;
 - up to 10 headlines from the last 30 days;
 - the macro snapshot and the sector's sensitivity tags;
-- your latest thesis **only if** you ticked "include in AI analysis" for that holding.
+- your latest thesis and qualitative notes **only if** you ticked "include in AI analysis" for
+  that holding (Thesis journal).
+
+**Sent** (per fund; built by code only):
+- category, index/active, share of the portfolio (%) and costs as entered;
+- top-10 holdings and sector weights from your uploaded disclosure, with its date (flagged
+  when stale);
+- overlap with your direct stocks and with other funds.
+
+Index funds emphasise tracking difference, cost and top-constituent concentration. Active
+funds emphasise concentration, sector tilts and overlap.
+
+**Sent** (portfolio summary): health dimensions, top company exposures and drift, all as
+percentages. The emergency fund is excluded.
 
 **Never sent:**
 - rupee amounts, quantities, invested/value/P&L, average cost;
 - platform or account details;
-- other holdings' names;
-- journal text without opt-in.
+- other holdings' names (stock cards);
+- journal or qualitative text without opt-in.
 
 The exact system prompt and input of every analysis are shown under **View exactly what was
 sent** (or *Preview what would be sent* before the first call).
 
 Every answer is validated before display. It is rejected if it:
 - (a) contains a number that is not in the input;
-- (b) uses buy/sell/hold/target-price/"will rise" wording;
+- (b) uses buy/sell/hold/switch, target-price, "will rise", good/bad fund or return-prediction
+  wording;
 - (c) has a statement without a valid citation to an input id;
 - (d) fails the JSON schema.
 
 A rejected answer is retried once with the reasons; if it fails again it is flagged and not
-shown. Calls use Anthropic's server-side refusal fallback (`fallbacks: "default"`); the card
-shows which model served it.
+shown.
+
+## Reliability: source health, start-up catch-up, running as a service
+
+**Source health** records every fetch (Yahoo prices, fundamentals, peers and macro; AMFI;
+NSE lists and announcements; news feeds; the LLM provider). For each it shows the last
+success, the last failure with its error, and a 30-day strip. Events are kept for 90 days.
+
+**Start-up catch-up.** When the backend starts, it:
+1. records every day since the last snapshot as a **gap** ("no snapshot: the app was not
+   running");
+2. fetches current prices and stores today's snapshot.
+
+The growth chart breaks the line at gaps and marks them; it never interpolates or back-fills.
+
+**Optional: run the backend as a systemd user service.** This is documentation only; the app
+does not install it. Create `~/.config/systemd/user/investments.service`:
+
+```ini
+[Unit]
+Description=Personal investment dashboard (backend, 127.0.0.1 only)
+
+[Service]
+WorkingDirectory=%h/projects/investments/backend
+ExecStart=%h/projects/investments/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Then run `systemctl --user daemon-reload && systemctl --user enable --now investments`.
+`loginctl enable-linger $USER` keeps it running while you are logged out. Start the UI with
+`make frontend` when you want it.
 
 ## Data sources
 
@@ -295,6 +440,8 @@ shows which model served it.
 | ETF classes / regions | NSE ETF list: ETF Underlying + Underlying Asset | Gold, Debt/Cash, International, … by what the ETF holds |
 | Fund category | AMFI `NAVAll.txt` section headers | needs a confirmed scheme code |
 | Fundamentals | Yahoo Finance via yfinance | only plausible values; otherwise N/A with the reason |
+| Annual statements (FCF, coverage, own history) | Yahoo Finance via yfinance (`income_stmt`, `cashflow`, `balance_sheet`) | usually four fiscal years |
+| Peer metrics | Yahoo Finance via yfinance, for the symbols you chose | rate-limited, cached 24 h |
 | ROCE, promoter holding, alpha, expense ratio, exit load, tracking error/difference | **manual** (source note + as-of date required) | no reliable free source; nothing is scraped |
 | Fund holdings | your uploads of AMC disclosures / index weights | |
 | USD/INR, Brent, Nifty 50 | Yahoo Finance via yfinance (`INR=X`, `BZ=F`, `^NSEI`) | N/A on failure; never filled from memory |

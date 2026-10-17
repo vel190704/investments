@@ -1,10 +1,14 @@
 # CLAUDE.md — conventions for this repo
 
 Personal, single-user, local-first investment **analytics** dashboard (Indian retail investor).
-It never places orders. See PLAN.md for the design and README.md for usage.
+It never places orders and never connects to a broker or platform account: **Excel (plus the
+in-app transaction form) is the only input for holdings and transactions.** See PLAN.md for the design and README.md for usage.
 
 ## Commands
-- `make setup`  — create `backend/.venv`, install Python deps, `npm install` in frontend
+- `make setup`  — create `backend/.venv`, install Python deps, `npm install` in frontend, install the
+  git pre-commit hook (`core.hooksPath=.githooks`)
+- `make check`  — backend tests + frontend tests + lint + typecheck; fails on any error. The
+  pre-commit hook runs it (plus a secret scan). Never bypass it with `--no-verify`.
 - `make dev`    — backend on 127.0.0.1:8000 + frontend on 127.0.0.1:3000
 - `make test`   — backend pytest + frontend tests
 - `make import FILE=data/personal_investment_tracker_clean.xlsx` — CLI import
@@ -14,14 +18,17 @@ It never places orders. See PLAN.md for the design and README.md for usage.
 - `make lint` — eslint + tsc; `make test` also runs the frontend formatter tests
 - Backend only: `cd backend && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload`
 - Frontend only: `cd frontend && npm run dev`
-- CLI import: `cd backend && .venv/bin/python -m app.import_excel ../data/<file>.xlsx`
+- CLI import: `cd backend && .venv/bin/python -m app.import_excel ../data/<file>.xlsx` (`--dry-run` to preview)
 
 ## Working rules
 - Work in phases; finish a phase, then stop and summarise for review.
 - State assumptions in PLAN.md instead of silently choosing.
 - Every financial calculation has a pytest test. Run tests before committing.
 - Small commits per milestone. Never commit `.env`, `data/`, `*.db`, `node_modules`, `.venv`.
-- No secrets in the repo; keys go in `.env` (template: `.env.example`).
+- No secrets in the repo; keys go in `.env` (template: `.env.example`, which must never hold a
+  real value). Tests never read `.env` (autouse fixture in `tests/conftest.py`).
+- Never let a command swallow a test result: Make recipes run under `bash -euo pipefail`; don't
+  pipe test output through `tail`/`grep` without `pipefail`.
 
 ## Schema changes
 - Every schema change is an Alembic migration in `backend/migrations/versions/` (autogenerate
@@ -35,6 +42,11 @@ It never places orders. See PLAN.md for the design and README.md for usage.
 - An import may delete only `excel` rows missing from the file, and only when the file has zero
   errors. It never deletes `ui` rows, snapshots, settings or the change log.
 - Every transaction or position change writes change-log entries (`app/services/changelog.py`).
+- The Import page previews first (`preview_workbook`: a savepoint that is always rolled back) and
+  applies only on Confirm with the one-shot token (the file's sha256). Keep preview and apply on
+  the same code path.
+- No broker/platform adapters, credentials, env vars or reconciliation: removed in Phase 5 by
+  decision. Don't reintroduce them.
 
 ## Architecture rules
 - Single user: no auth, no user tables, no `user_id`. Backend binds to 127.0.0.1 only.
@@ -74,7 +86,7 @@ It never places orders. See PLAN.md for the design and README.md for usage.
 - Portfolio Health has no overall score or ranking; LOW/MODERATE/HIGH only where a threshold exists
   in code (editable in Settings › health); everything else is "information only".
 
-## Outbound requests, news and the LLM (Phase 4)
+## Outbound requests, news and the LLM
 - All news/announcement fetching goes through `app/net/polite.py`, which:
   - checks robots.txt (a 403 on robots.txt means not permitted);
   - rate-limits per host and caches responses;
@@ -90,8 +102,34 @@ It never places orders. See PLAN.md for the design and README.md for usage.
   per-holding opt-in.
 - LLM output must pass `app/llm/validate.py` (no invented numbers, no recommendation/prediction
   wording, citations to input ids, schema); failures are flagged, never shown as analysis.
-  Bump `PROMPT_VERSION` when the prompt or schema changes.
+  Bump `PROMPT_VERSION` when the prompt or schema changes. Card kinds: stock, fund, portfolio
+  (`app/llm/prompts.py::KINDS`); fund and portfolio inputs are built by code only.
+- Model id is free text (Settings › llm, then `CLAUDE_MODEL`, then `claude-opus-5-5`). No token
+  prices ship with the app (cost is N/A until the user sets them). Refusal fallback is opt-in
+  (default off); cards show the answering model and the requested one when they differ.
+- Don't make live LLM calls during development without the user's approval (it costs money).
 - The thesis journal is append-only (no update/delete paths).
+
+## Valuation, peers and qualitative notes (Phase 5)
+- P/S, PEG, FCF (latest, trend, margin, yield) and interest coverage are pure functions in
+  `app/calc/valuation.py`; each N/A carries its reason, and PEG carries its formula and inputs.
+- Framework checks (`app/calc/framework.py`) return MEETS / DOES NOT MEET / N/A / NOT APPLICABLE /
+  INFO per rule with value and sources. Never add a score, count-based verdict or ranking.
+  Thresholds live in Settings › rubric; per-sector "not applicable" metrics in Settings ›
+  sector_rules.
+- Peers are chosen by the user only (max 8 NSE stocks, never seeded or suggested); label them
+  "peers chosen by me". A median needs ≥3 peer values. Peer fetches are rate-limited and cached.
+- Own history only from stored annual statements; historical P/E only from a stored price near
+  the fiscal year end. Never estimate history.
+- Qualitative notes are append-only versions with a source note and as-of date; they reach the
+  LLM only with the same per-holding opt-in as the thesis.
+
+## Reliability
+- Every fetcher records a source-health event (`app/services/source_health.record`, never raises).
+- Start-up catch-up records missed days as `snapshot_gaps`; charts break the line there. Never
+  interpolate or back-fill snapshots.
+- Parser regression tests use trimmed real responses in `backend/tests/fixtures/` (no personal
+  data). Re-record them when a source format changes.
 
 ## Settings
 - User choices have no invented defaults: targets and the emergency fund start unset ("Set your
