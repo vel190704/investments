@@ -59,6 +59,74 @@ async def upload(file: UploadFile = File(...), resolve: bool = True, session: Se
     return {"report": report, "text": format_report(report), "resolution": resolution}
 
 
+def _preview_dir() -> Path:
+    from app.config import get_settings
+
+    d = get_settings().cache_dir / "import-preview"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+@router.post("/import/preview")
+async def import_preview(file: UploadFile = File(...), session: Session = Depends(get_session)):
+    """Dry run. The file is kept under its sha256 so Confirm applies exactly what was previewed."""
+    import hashlib
+
+    from app.importer.run import preview_workbook
+
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(400, "Please upload an .xlsx workbook")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "File too large")
+    token = hashlib.sha256(data).hexdigest()
+    path = _preview_dir() / f"{token}.xlsx"
+    path.write_bytes(data)
+    name = Path(file.filename).name
+    (_preview_dir() / f"{token}.name").write_text(name)
+    report = preview_workbook(session, path, file_name=name)
+    return {"token": token, "file_name": name, "report": report, "text": format_report(report)}
+
+
+class ConfirmIn(BaseModel):
+    token: str
+
+
+@router.post("/import/confirm")
+def import_confirm(body: ConfirmIn, session: Session = Depends(get_session)):
+    import hashlib
+    import re as _re
+
+    if not _re.fullmatch(r"[0-9a-f]{64}", body.token):
+        raise HTTPException(422, "invalid token")
+    path = _preview_dir() / f"{body.token}.xlsx"
+    if not path.exists():
+        raise HTTPException(404, "Preview expired or not found; upload the file again")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != body.token:
+        raise HTTPException(409, "The previewed file changed; upload it again")
+    name_file = _preview_dir() / f"{body.token}.name"
+    name = name_file.read_text() if name_file.exists() else path.name
+    report = import_workbook(session, path, file_name=name)
+    session.commit()
+    resolution = None
+    if report["ok"]:
+        try:
+            resolution = resolve_identifiers(session)
+            session.commit()
+        except Exception as e:
+            resolution = {"summary": f"Identifier matching skipped: {e}", "errors": [str(e)]}
+        try:
+            from app.services.classification import refresh_classification
+
+            refresh_classification(session)
+            session.commit()
+        except Exception:
+            session.rollback()
+    path.unlink(missing_ok=True)
+    name_file.unlink(missing_ok=True)
+    return {"report": report, "text": format_report(report), "resolution": resolution}
+
+
 @router.get("/import/runs")
 def import_runs(session: Session = Depends(get_session)):
     return [{"id": r.id, "started_at": as_utc(r.started_at).isoformat(), "file_name": r.file_name, "ok": r.ok,
@@ -830,3 +898,11 @@ def alerts_read(aid: int, session: Session = Depends(get_session)):
     except KeyError:
         raise HTTPException(404, "alert not found") from None
     return {"ok": True}
+
+
+# ---------------- Phase 5
+@router.get("/monthly-update")
+def monthly_update_view(session: Session = Depends(get_session)):
+    from app.services.monthly import monthly_update
+
+    return monthly_update(session)

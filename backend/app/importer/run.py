@@ -105,7 +105,7 @@ def import_workbook(session: Session, path: str | Path, file_name: str | None = 
     report: dict = {
         "file": file_name, "sha256": hashlib.sha256(data).hexdigest(), "ok": False, "fatal": [],
         "transactions": {"rows_in_sheet": 0, "loaded": 0, "inserted": 0, "unchanged": 0, "updated_notes": 0,
-                         "removed": 0, "matched_ui": [], "pruning": "", "skipped": [], "errors": [], "warnings": [],
+                         "removed": 0, "matched_ui": [], "added_rows": [], "removed_rows": [], "pruning": "", "skipped": [], "errors": [], "warnings": [],
                          "by_asset_type": {}},
         "holdings_fallback": {"rows": 0, "used": [], "ignored": 0, "skipped": [], "errors": []},
         "monthly_plan": {"rows": 0, "total_paise": 0, "total_row_paise": None, "fraction_sum": "0",
@@ -263,10 +263,16 @@ def _sync(session, report, parsed, fallbacks, plans, file_name, has_errors: bool
             session.add(row)
             added.append(row)
             tr["inserted"] += 1
+            tr["added_rows"].append({"row": t.row, "date": t.date.isoformat(), "type": t.type, "name": t.name,
+                                     "quantity": decimal_to_str(t.quantity) if t.quantity is not None else None,
+                                     "amount_paise": t.amount_paise})
     tr["loaded"] = len(parsed)
     tr["by_asset_type"] = dict(sorted(by_type.items()))
 
     stale = [row for k, row in existing.items() if k not in seen]
+    tr["removed_rows"] = [{"id": r.id, "date": r.date.isoformat(), "type": r.type, "name": r.instrument.name,
+                           "quantity": decimal_to_str(r.quantity) if r.quantity is not None else None,
+                           "amount_paise": r.amount_paise, "source_row": r.source_row} for r in stale] if not has_errors else []
     if has_errors:
         tr["pruning"] = (f"skipped: the file has row errors, so {len(stale)} previously imported row(s) not in "
                          "this file were kept" if stale else "skipped (file has row errors)")
@@ -372,3 +378,16 @@ def format_report(report: dict) -> str:
     lines += [f"instruments: {len(created)} created, {report['instruments']['existing']} already known"]
     lines += ["", "RESULT: " + ("OK" if report["ok"] else "COMPLETED WITH ERRORS")]
     return "\n".join(lines)
+
+
+
+def preview_workbook(session: Session, path: str | Path, file_name: str | None = None) -> dict:
+    """Dry run: the real importer inside a SAVEPOINT that is always rolled back. Nothing is saved."""
+    sp = session.begin_nested()
+    try:
+        report = import_workbook(session, path, file_name)
+    finally:
+        sp.rollback()
+    session.expire_all()
+    report["preview"] = True
+    return report
