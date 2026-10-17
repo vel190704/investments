@@ -30,6 +30,30 @@ def _classify_and_fundamentals() -> None:
         log.exception("Classification/fundamentals refresh failed")
 
 
+def _phase4_daily() -> None:
+    """Daily: news + macro + alerts. Sundays: the opt-in weekly AI job (holdings with new events only)."""
+    from datetime import datetime
+
+    from app.services.alerts import evaluate_alerts
+    from app.services.analysis import weekly_job
+    from app.services.macro import refresh_macro
+    from app.services.news import refresh_news
+    from app.timeutil import IST
+
+    for name, fn in (("news", refresh_news), ("macro", refresh_macro), ("alerts", evaluate_alerts)):
+        try:
+            with session_scope() as s:
+                fn(s)
+        except Exception:
+            log.exception("Daily %s job failed", name)
+    if datetime.now(IST).weekday() == 6:
+        try:
+            with session_scope() as s:
+                weekly_job(s)
+        except Exception:
+            log.exception("Weekly AI job failed")
+
+
 def _job() -> None:
     """Daily: refresh prices, then store today's snapshot (refresh_prices takes it)."""
     _classify_and_fundamentals()
@@ -47,6 +71,7 @@ def _job() -> None:
                 take_snapshot(s, trigger="scheduled")
         except Exception:
             log.exception("Scheduled snapshot failed")
+    _phase4_daily()
 
 
 def start_scheduler() -> BackgroundScheduler | None:

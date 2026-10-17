@@ -582,3 +582,286 @@ def portfolio_health(session: Session = Depends(get_session)):
     from app.services.health import health as run
 
     return run(session)
+
+
+# ---------------- Phase 4: news, macro, AI analysis, journal, broker, alerts
+@router.get("/news")
+def news_feed(isin: str | None = None, category: str | None = None, days: int = 30,
+              session: Session = Depends(get_session)):
+    from app.services.news import feed
+
+    return feed(session, isin or None, category or None, max(1, min(days, 90)))
+
+
+@router.get("/news/recent")
+def news_recent(session: Session = Depends(get_session)):
+    from app.services.news import recent
+
+    return recent(session)
+
+
+@router.post("/news/refresh")
+def news_refresh(session: Session = Depends(get_session)):
+    from app.services.alerts import evaluate_alerts
+    from app.services.news import refresh_news
+
+    rep = refresh_news(session)
+    try:
+        rep["alerts_created"] = evaluate_alerts(session)["created"]
+    except Exception:
+        rep["alerts_created"] = 0
+    return rep
+
+
+@router.get("/macro")
+def macro(session: Session = Depends(get_session)):
+    from app.services.macro import sensitivity_page, snapshot
+
+    return {"snapshot": snapshot(session), **sensitivity_page(session)}
+
+
+@router.post("/macro/refresh")
+def macro_refresh(session: Session = Depends(get_session)):
+    from app.services.macro import refresh_macro
+
+    return refresh_macro(session)
+
+
+class MacroIn(BaseModel):
+    value: str
+    source_note: str
+    as_of: str
+    label: str | None = None
+    unit: str | None = None
+
+
+@router.put("/macro/{key}")
+def macro_manual(key: str, body: MacroIn, session: Session = Depends(get_session)):
+    from datetime import date as _date
+
+    from app.services.macro import MacroError, set_manual
+
+    try:
+        as_of = _date.fromisoformat(body.as_of)
+    except ValueError:
+        raise HTTPException(422, "as_of must be YYYY-MM-DD") from None
+    if not key.replace("_", "").isalnum() or len(key) > 50:
+        raise HTTPException(422, "key must be letters, digits and underscores")
+    try:
+        set_manual(session, key, body.label, body.value, body.unit, body.source_note, as_of)
+    except MacroError as e:
+        raise HTTPException(422, str(e)) from None
+    return {"ok": True}
+
+
+@router.delete("/macro/{key}")
+def macro_delete(key: str, session: Session = Depends(get_session)):
+    from app.services.macro import delete_manual
+
+    delete_manual(session, key)
+    return {"ok": True}
+
+
+class TagsIn(BaseModel):
+    tags: list[str]
+    note: str | None = None
+
+
+@router.put("/sensitivities/{sector}")
+def put_sensitivity(sector: str, body: TagsIn, session: Session = Depends(get_session)):
+    from app.services.macro import MacroError, set_tags
+
+    try:
+        set_tags(session, sector, body.tags, body.note)
+    except MacroError as e:
+        raise HTTPException(422, str(e)) from None
+    return {"ok": True}
+
+
+@router.get("/analysis")
+def analysis_cards(session: Session = Depends(get_session)):
+    from app.services.analysis import cards
+
+    return cards(session)
+
+
+@router.post("/analysis/{iid}")
+def analysis_run(iid: int, refresh: bool = False, session: Session = Depends(get_session)):
+    from app.llm.inputs import InputError
+    from app.llm.provider import LLMUnavailable
+    from app.services.analysis import analyze
+
+    try:
+        return analyze(session, iid, refresh=refresh)
+    except InputError as e:
+        raise HTTPException(422, str(e)) from None
+    except LLMUnavailable as e:
+        session.commit()  # keep the call log even when the provider failed
+        raise HTTPException(409, str(e)) from None
+
+
+@router.get("/analysis/{iid}/preview")
+def analysis_preview(iid: int, session: Session = Depends(get_session)):
+    from app.llm.inputs import InputError
+    from app.services.analysis import preview
+
+    try:
+        return preview(session, iid)
+    except InputError as e:
+        raise HTTPException(422, str(e)) from None
+
+
+@router.get("/analysis/{iid}/sent/{aid}")
+def analysis_sent(iid: int, aid: int, session: Session = Depends(get_session)):
+    from app.llm.prompts import SYSTEM_PROMPT
+    from app.models import LlmAnalysis
+
+    a = session.get(LlmAnalysis, aid)
+    if a is None or a.instrument_id != iid:
+        raise HTTPException(404, "analysis not found")
+    note = None if a.prompt_version else "prompt version unknown"
+    return {"model": a.model, "prompt_version": a.prompt_version, "system": SYSTEM_PROMPT, "input": a.input_json,
+            "note": note}
+
+
+@router.post("/news/suggest-categories")
+def news_suggest(session: Session = Depends(get_session)):
+    from app.llm.provider import LLMUnavailable
+    from app.services.analysis import suggest_categories
+
+    try:
+        return suggest_categories(session)
+    except LLMUnavailable as e:
+        raise HTTPException(409, str(e)) from None
+
+
+@router.get("/llm/status")
+def llm_status(session: Session = Depends(get_session)):
+    from app.services.analysis import gate, usage
+
+    return {"gate": gate(session), "usage": usage(session)}
+
+
+@router.get("/journal")
+def journal_page(session: Session = Depends(get_session)):
+    from app.services.journal import journal
+
+    return journal(session)
+
+
+class ThesisIn(BaseModel):
+    why: str
+    change_view: str
+    horizon: str
+    review_date: str | None = None
+    linked_txn_ids: list[int] = []
+    linked_change_ids: list[int] = []
+
+
+@router.post("/journal/{iid}", status_code=201)
+def journal_add(iid: int, body: ThesisIn, session: Session = Depends(get_session)):
+    from datetime import date as _date
+
+    from app.services.journal import JournalError, add_entry
+
+    try:
+        rd = _date.fromisoformat(body.review_date) if body.review_date else None
+    except ValueError:
+        raise HTTPException(422, "review_date must be YYYY-MM-DD") from None
+    try:
+        return add_entry(session, iid, body.why, body.change_view, body.horizon, rd, body.linked_txn_ids,
+                         body.linked_change_ids)
+    except JournalError as e:
+        raise HTTPException(422, str(e)) from None
+
+
+@router.get("/journal/{iid}/history")
+def journal_history(iid: int, session: Session = Depends(get_session)):
+    from app.services.journal import history
+
+    return history(session, iid)
+
+
+class OptIn(BaseModel):
+    send_to_llm: bool
+
+
+@router.put("/journal/{iid}/optin")
+def journal_optin(iid: int, body: OptIn, session: Session = Depends(get_session)):
+    from app.services.journal import set_optin
+
+    set_optin(session, iid, body.send_to_llm)
+    return {"ok": True}
+
+
+@router.get("/strategy")
+def strategy_view(since: str, session: Session = Depends(get_session)):
+    from datetime import date as _date
+
+    from app.services.journal import strategy
+
+    try:
+        d = _date.fromisoformat(since)
+    except ValueError:
+        raise HTTPException(422, "since must be YYYY-MM-DD") from None
+    return strategy(session, d)
+
+
+@router.get("/broker/status")
+def broker_status():
+    from app.services.broker import status
+
+    return status()
+
+
+class TotpIn(BaseModel):
+    totp: str | None = None
+
+
+@router.post("/broker/groww/token")
+def broker_token(body: TotpIn):
+    from app.brokers.base import BrokerError
+    from app.services.broker import groww_adapter
+
+    try:
+        exp = groww_adapter().login(body.totp or None)
+    except BrokerError as e:
+        raise HTTPException(409, str(e)) from None
+    return {"ok": True, "expiry": exp.isoformat() if exp else None}
+
+
+@router.get("/reconcile")
+def reconcile_view(session: Session = Depends(get_session)):
+    from app.brokers.base import BrokerError
+    from app.services.broker import groww_adapter, reconcile_with
+
+    try:
+        adapter = groww_adapter()
+    except BrokerError as e:
+        return {"ok": False, "error": str(e), "differences": [], "not_compared": []}
+    return reconcile_with(session, adapter)
+
+
+@router.get("/alerts")
+def alerts_list(unread_only: bool = False, session: Session = Depends(get_session)):
+    from app.services.alerts import list_alerts
+
+    return list_alerts(session, unread_only)
+
+
+@router.post("/alerts/evaluate")
+def alerts_evaluate(session: Session = Depends(get_session)):
+    from app.services.alerts import evaluate_alerts
+
+    return evaluate_alerts(session)
+
+
+@router.post("/alerts/{aid}/read")
+def alerts_read(aid: int, session: Session = Depends(get_session)):
+    from app.services.alerts import mark_read
+
+    try:
+        mark_read(session, aid)
+    except KeyError:
+        raise HTTPException(404, "alert not found") from None
+    return {"ok": True}

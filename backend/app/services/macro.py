@@ -33,7 +33,8 @@ def yf_last_close(ticker: str) -> tuple[Decimal, date]:
     return Decimal(repr(round(float(h["Close"].iloc[-1]), 4))), h.index[-1].date()
 
 
-def refresh_macro(s: Session, fetch=yf_last_close) -> dict:
+def refresh_macro(s: Session, fetch=None) -> dict:
+    fetch = fetch or yf_last_close  # resolved at call time (tests patch the module attribute)
     report = {}
     for key, (label, ticker, unit) in AUTO.items():
         row = s.scalar(select(MacroValue).where(MacroValue.key == key, MacroValue.origin == "AUTO"))

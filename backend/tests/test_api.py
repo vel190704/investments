@@ -189,3 +189,39 @@ def json_dumps(x):
     import json
 
     return json.dumps(x)
+
+
+def test_phase4_endpoints_degrade_without_network_or_key(client, workbook, monkeypatch):
+    import httpx
+
+    from app.net import polite
+
+    upload(client, workbook)
+    price_everything()
+
+    def boom(req):
+        raise httpx.ConnectError("offline")
+    monkeypatch.setattr(polite, "_default", polite.PoliteClient(transport=httpx.MockTransport(boom), min_interval=0))
+    r = client.post("/api/news/refresh")
+    assert r.status_code == 200 and r.json()["added"] == 0
+    feed = client.get("/api/news").json()
+    assert all(not s["ok"] and "Source unavailable" in s["message"] for s in feed["sources"]), feed["sources"]
+    assert client.get("/api/news/recent").json() == []
+    import app.services.macro as mc
+    monkeypatch.setattr(mc, "yf_last_close", lambda t: (_ for _ in ()).throw(ConnectionError("offline")))
+    client.post("/api/macro/refresh")
+    m = client.get("/api/macro").json()
+    assert all(r["value"] is None for r in m["snapshot"]) and m["scenarios"]
+    a = client.get("/api/analysis").json()
+    assert a["gate"].startswith("Privacy toggle is off") and len(a["holdings"]) == 14
+    lt = next(h for h in a["holdings"] if h["symbol"] == "LT")
+    assert client.post(f"/api/analysis/{lt['instrument_id']}").status_code == 409
+    prev = client.get(f"/api/analysis/{lt['instrument_id']}/preview").json()
+    assert "₹" not in json_dumps(prev["input"]) and prev["system"].startswith("You write scenario")
+    assert client.get("/api/reconcile").json()["ok"] is False  # flag off: app works as before
+    assert client.get("/api/alerts").status_code == 200 and client.post("/api/alerts/evaluate").status_code == 200
+    j = client.post(f"/api/journal/{lt['instrument_id']}", json={"why": "w", "change_view": "c", "horizon": "5y",
+                                                                   "review_date": "2026-01-01"})
+    assert j.status_code == 201 and j.json()["version"] == 1
+    assert client.get("/api/journal").json()["review_due"][0]["name"] == "LT"
+    assert client.get("/api/strategy?since=2026-10-01").status_code == 200
