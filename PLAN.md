@@ -3,7 +3,8 @@
 Single-user, local-first portfolio analytics and planning tool for an Indian retail investor.
 It **never places orders**. Excel workbook = source of truth for transactions.
 
-Status: Phases 0–4 done (§10 = Phase 2, §11 = Phase 3, §12 = Phase 4).
+Status: Phases 0–4 done (§10 = Phase 2, §11 = Phase 3, §12 = Phase 4). Phase 5 (§13) in progress:
+Excel-only workflow, hygiene, valuation framework, peers, qualitative notes, fund/portfolio AI cards, reliability.
 
 ---
 
@@ -793,3 +794,180 @@ or investment advice."
    the larger exposure.
 8. NSE's RSS host timed out during the live test (2026-10-17); it degrades to "Source
    unavailable" and is retried on the next refresh after the 10-minute cool-down.
+
+
+---
+
+## 13. Phase 5 design
+
+**Decision (user): the Excel workbook is the ONLY input for holdings and transactions; the app
+never connects to a trading account.** The AI works only from what is imported and entered.
+
+### 13.0 Engineering hygiene
+- `make check`: backend pytest, frontend tests, eslint and `tsc --noEmit`, run with
+  `set -euo pipefail` so any failure fails the target. No command may pipe a test result into
+  something that hides its exit code.
+- Git pre-commit hook `.githooks/pre-commit`, installed by `make setup` (`make hooks` →
+  `git config core.hooksPath .githooks`). It:
+  - refuses staged content matching secret patterns (`sk-ant-…`, `ANTHROPIC_API_KEY=<value>`);
+  - then runs `make check`.
+- LLM settings:
+  - `model` is free text (validated characters); the default comes from `CLAUDE_MODEL` in
+    `.env`, else `claude-opus-5-5`.
+  - **Prices have no hard-coded defaults:** cost estimates show "set prices in Settings" until
+    entered, and Settings notes "verify against the provider's pricing page".
+  - `refusal_fallback` is a toggle, **default off**; when on, requests carry the server-side
+    fallback.
+  - Each analysis stores `requested_model` and the model that answered; a card shows both
+    when they differ.
+
+### 13.1 Excel-only workflow
+- The read-only account adapters, reconciliation page, feature flag, env vars, tests and docs
+  are deleted. Phase 4 created no tables for them, so the migration has nothing to drop
+  (stated, not invented).
+- **Import preview (dry run):**
+  - `POST /import/preview` saves the upload under `data/cache/import-preview/<sha256>.xlsx` and
+    runs the real importer inside a SAVEPOINT that is rolled back.
+  - It returns rows to add, rows to remove (Excel-source only, and only when the file has no
+    errors), rows already present as in-app entries, and rows with errors (row numbers and
+    reasons).
+  - `POST /import/confirm {token}` applies that exact file (sha verified).
+  - The CLI gains `--dry-run`.
+- **Monthly update** (`GET /monthly-update`, page `/monthly`) — a checklist whose ticks are
+  derived from data for the current IST month:
+  1. each `monthly_plan` fund has a SIP/BUY row dated this month (otherwise a warning naming
+     the fund);
+  2. stock/ETF buys recorded this month (count);
+  3. a successful import this month;
+  4. prices refreshed in the last 24 h;
+  5. today's snapshot exists.
+  - It also shows how to turn Coin units/NAV into a SIP row (amount authoritative).
+
+### 13.2 Valuation framework (`app/calc/valuation.py`, pure)
+New metrics come from yfinance where present and plausible; otherwise N/A with the reason. A
+manual override needs a source note and an as-of date.
+
+| metric | definition / source | N/A when |
+|---|---|---|
+| P/S | `priceToSalesTrailing12Months` | missing, ≤ 0 or > 200 |
+| PEG | **P/E ÷ (earnings growth × 100)**, with P/E = `trailingPE` and growth = `earningsGrowth` (YoY, latest quarter); formula and inputs shown | no P/E; growth missing, ≤ 0 or > 1000%; result > 100 |
+| FCF (latest annual + trend) | cash-flow statement "Free Cash Flow" per fiscal year | not reported |
+| FCF margin | FCF ÷ Total Revenue, same fiscal year | either missing / revenue ≤ 0 |
+| FCF yield | latest FCF ÷ market cap | either missing |
+| Interest coverage | EBIT ÷ Interest Expense (latest year) | either missing, interest ≤ 0; **not applicable** for sectors in the rules table |
+
+- Annual statement lines are stored in `annual_financials`: revenue, net income, EBIT,
+  interest expense, FCF, equity, total debt, diluted EPS.
+- Own history (only what the stored years allow): ROE (net income ÷ equity), net margin,
+  FCF, FCF margin and EPS per fiscal year.
+- **Historical P/E** is computed only if a stored price exists within ±7 days of the fiscal
+  year end (price ÷ that year's diluted EPS); otherwise N/A. It is never estimated.
+- **Framework check** (Settings › rubric; defaults below). Each check is MEETS / DOES NOT
+  MEET / N/A / NOT APPLICABLE (sector), with values, sources and the rule. There is **no
+  overall score, ranking or verdict**.
+  - P/E ≤ peer median (tolerance 0%);
+  - P/E ≤ own historical P/E median;
+  - PEG < 1.0;
+  - ROE > 15%;
+  - debt/equity < 2.0;
+  - FCF latest > 0;
+  - FCF not declining (latest ≥ previous fiscal year).
+- **Sector rules** (Settings, editable): metrics not meaningful for a sector. The default is
+  `Financial Services → debt_to_equity, interest_coverage`.
+
+### 13.3 Peers (user-maintained; nothing seeded)
+- Table `peer_sets` holds, per stock: up to 8 NSE symbols and a "why these peers" note.
+- Peer metrics are fetched via yfinance at most once a day per symbol, 1 s apart, cached in
+  `peer_metrics` with source and as-of. The metrics are P/E, P/S, PEG, ROE, D/E, revenue
+  growth, profit growth, FCF margin and FCF yield.
+- The comparison shows my value vs the **peer median** (labelled "peers chosen by me") and lists
+  every peer value. A median needs at least 3 peers with a value; otherwise N/A.
+
+### 13.4 Qualitative fields
+- Table `qualitative_entries`, append-only and versioned. Fields:
+  - moat type ∈ {brand, switching costs, cost advantage, network effects, regulatory or
+    licence, none or unclear};
+  - moat note and capital-allocation note;
+  - source note and as-of (both required);
+  - optional link to a thesis entry.
+- LLM input includes them only when the holding's existing opt-in box is ticked (now
+  labelled "thesis and qualitative notes").
+
+### 13.5 AI upgrades
+- Stock input adds:
+  - framework checks (`fc:<key>`);
+  - peer comparisons (`pc:<metric>`, with peer values);
+  - P/S, PEG (with inputs), FCF figures, FCF history (`hist:<metric>:<FY>`);
+  - opted-in qualitative fields (`q:…`).
+- **Fund cards**, for every mutual fund. The input is built by code only:
+  - category and fund type (index vs active);
+  - expense ratio, exit load, tracking difference (manual, else N/A);
+  - top 10 look-through holdings with weights and the disclosure as-of + stale flag;
+  - sector weights inside the fund;
+  - overlap with each other fund, and with my direct stocks;
+  - the fund's share of the portfolio %;
+  - the thesis/qualitative notes if opted in;
+  - a `focus` list (index: tracking difference, cost, top-constituent concentration; active:
+    concentration, sector tilts, overlap).
+  - Output schema `cost_and_tracking[]`, `concentration[]`, `sector_tilts[]`, `overlap[]`,
+    `key_risks[]`, `what_would_change_this_view[]`, `data_gaps[]` — each `{text, citations}`.
+- **Portfolio summary** card (optional, one per input hash). The input is concentration
+  (look-through), drift, sector metrics and health dimensions; the output is a `summary[]` of
+  factual statements plus `data_gaps[]`.
+- The same validator applies to all three card kinds (schema per kind). The banned list gains:
+  switch / switching, good/bad/great/poor/best/worst fund|choice|investment, and returns
+  will / should / are expected.
+- `llm_analyses` gains `kind` (stock / fund / portfolio), a nullable `instrument_id` and
+  `requested_model`.
+
+### 13.6 Reliability
+- `source_events` (`source`, `ok`, `message`, `at`; kept 90 days) is recorded by price refresh
+  (yfinance, AMFI), classification and identifier refresh (NSE lists, AMFI), fundamentals and
+  peers (yfinance statements), news feeds, macro (yfinance) and LLM calls. The page `/sources`
+  shows last success, last failure, last error and a 30-day daily status strip
+  (ok / failed / mixed / none).
+- **Startup catch-up:** on start, if the last snapshot is before today:
+  - refresh prices and NAVs;
+  - take today's snapshot;
+  - record every missed calendar date in `snapshot_gaps` (reason "app not running").
+  - The growth series includes gaps as null points, so the chart shows a break; no value is
+    interpolated or back-filled.
+- A systemd user service is documented in README (not installed).
+- Recorded fixtures (`tests/fixtures/`) come from real successful fetches on 2026-10-17 and
+  contain no personal data:
+  - yfinance daily bars for LT.NS;
+  - LT.NS statement lines;
+  - AMFI NAVAll lines for the held schemes;
+  - NSE Total Market rows;
+  - NSE announcement RSS items.
+  - Parser regression tests use them.
+
+### 13.7 Schema (`0005_phase5`)
+- New tables: `annual_financials`, `peer_sets`, `peer_metrics`, `qualitative_entries`,
+  `source_events`, `snapshot_gaps`.
+- `llm_analyses`: + `kind`, + `requested_model`, `instrument_id` nullable (batch alter).
+- No tables to drop.
+
+### 13.8 Endpoints and pages
+- Import: `POST /import/preview` · `POST /import/confirm`
+- Monthly: `GET /monthly-update`
+- Valuation: `GET /valuation` · `GET /valuation/{iid}` · `PUT /peers/{iid}` · `POST /peers/refresh`
+- Qualitative: `GET /qualitative/{iid}` · `POST /qualitative/{iid}`
+- Analysis: `POST /analysis/fund/{iid}` · `POST /analysis/portfolio` · `GET /analysis/portfolio`
+  · `GET /analysis/sent/{aid}`
+- Sources: `GET /source-health`
+- Pages: `/monthly`, `/valuation`, `/sources`; Import gains preview/confirm; Journal gains
+  qualitative notes; AI analysis gains fund cards and the portfolio summary; Settings gains the
+  rubric, sector rules and the LLM model/prices/fallback.
+- Removed: the reconcile page and nav entry.
+
+### 13.9 Phase 5 assumptions
+1. "Earnings growth percentage" for PEG = yfinance `earningsGrowth` (latest quarter, YoY) ×
+   100.
+2. "FCF not declining" = latest fiscal-year FCF ≥ the previous fiscal year's.
+3. The peer median uses peers only (my stock excluded).
+4. Missed snapshot dates are calendar days, including weekends and holidays, since the app
+   was off.
+5. The model name and token prices are user settings; the app ships no prices.
+6. `CLAUDE_MODEL` in `.env` sets the default model (`claude-sonnet-5` in this `.env`); a model
+   chosen in Settings overrides it.
