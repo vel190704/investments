@@ -3,7 +3,8 @@
 Single-user, local-first portfolio analytics and planning tool for an Indian retail investor.
 It **never places orders**. Excel workbook = source of truth for transactions.
 
-Status: Phases 0–3 done (§10 = Phase 2, §11 = Phase 3). Phase 4 is next.
+Status: Phases 0–3 done (§10 = Phase 2, §11 = Phase 3). Phase 4 (§12) in progress: news and
+announcements, macro, LLM scenario analysis, thesis journal, read-only broker reconciliation, alerts.
 
 ---
 
@@ -584,3 +585,206 @@ companies and the top sectors, using the same look-through inputs. The wording s
 8. The AMC column aliases come from the published column names of each AMC's monthly portfolio
    file and are verified on synthetic fixtures only. A real file whose headers differ fails with
    an error that shows the header row it found, so an alias can be added.
+
+
+---
+
+## 12. Phase 4 design
+
+### 12.1 Data sources (checked 2026-10-17)
+| need | source | finding / decision |
+|---|---|---|
+| Company news via **Google News RSS** (requested) | `news.google.com/rss/search` | **robots.txt disallows `/rss` for every user agent** (`Disallow: /` with exceptions only for home/topics/stories). Per the "respect robots/terms" rule the source is implemented but every fetch is refused by the robots guard and the holding shows **"Source unavailable (robots.txt disallows …)"**. It is not worked around. |
+| Exchange announcements | NSE's official RSS feeds on `nsearchives.nseindia.com/content/RSS/` (`Online_announcements.xml`, `Board_Meetings.xml`, `Financial_Results.xml`, `Corporate_action.xml`), published for feed readers; no robots.txt (404 = allowed) | Used. Each item's link starts with the NSE symbol (`LT_17102026…pdf`) → matched by symbol, stored by ISIN. Only a rolling window of recent items is published, so history builds from the first fetch. |
+| BSE announcements | `api.bseindia.com` returns 403 to non-browser clients | Not used ("Source unavailable"); no evasion. |
+| Market news | Publisher RSS feeds whose robots.txt allows the feed URL: ET Markets, Mint Markets, Business Standard Markets, Moneycontrol Business | Default feed list (editable in Settings). Items are matched to holdings by exact company-name phrase or upper-case NSE symbol (≥ 3 letters) in the headline. This is relevance matching for a news feed only; financial calculations still match by ISIN. |
+| USD/INR, Brent, Nifty 50 | yfinance `INR=X`, `BZ=F`, `^NSEI` | Automated; source + as-of shown; N/A on failure. |
+| Repo rate, CPI and others | none reliable | **Manual** entry with source note + as-of; N/A otherwise. Never filled from memory. |
+| Groww holdings | Official Groww Trade API: `POST /v1/token/api/access` (`key_type: totp`) → token (expires daily); `GET /v1/holdings/user` (`X-API-VERSION: 1.0`) | Read-only adapter behind `GROWW_ENABLED`; secrets only in `.env`. |
+| LLM | Anthropic Messages API (`anthropic` SDK), default model `claude-opus-5-5`, structured outputs (`output_config.format` JSON schema), server-side refusal fallbacks (`fallbacks: "default"`) | Off unless an API key is set **and** the privacy toggle allows outbound calls. |
+
+Polite fetching (`app/net/polite.py`):
+- one shared client with a clear User-Agent (`personal-portfolio-dashboard/0.4 (single-user, local)`);
+- a robots.txt check per URL, with robots files cached for 24 h;
+- at least 2 s between requests to the same host;
+- feed responses cached for 30 min;
+- no retries on 401/403/429 ("Source unavailable").
+
+### 12.2 Schema (`0004_phase4`)
+| table | columns |
+|---|---|
+| `news_items` | `id`, `isin` (indexed), `instrument_id` (nullable), `title`, `source`, `source_kind` (EXCHANGE / NEWS), `url` UNIQUE, `published_at`, `fetched_at`, `category`, `category_origin` (RULE / MODEL), `summary` (source text only), `dedupe_key` |
+| `news_source_status` | `source`, `isin` (nullable), `ok`, `message`, `checked_at`; UNIQUE(source, isin) |
+| `macro_values` | `key`, `origin` (AUTO / MANUAL), `value`, `unit`, `source`, `as_of`, `fetched_at`, `status`, `note`; UNIQUE(key, origin) |
+| `sector_sensitivities` | `sector` PK, `tags` JSON, `origin` (STARTER / USER), `note`, `updated_at` |
+| `llm_analyses` | `id`, `instrument_id`, `input_hash` (indexed), `input_json`, `output_json`, `status` (OK / FAILED), `errors` JSON, `model`, `prompt_version`, `data_as_of`, `created_at`, `attempts`, `input_tokens`, `output_tokens` |
+| `llm_calls` | `id`, `purpose` (analysis / category), `model`, `created_at`, `input_tokens`, `output_tokens`, `ok`, `error` |
+| `thesis_entries` | `id`, `instrument_id`, `version`, `why`, `change_view`, `horizon`, `review_date`, `created_at`, `linked_txn_ids` JSON, `linked_change_ids` JSON; UNIQUE(instrument_id, version) — **append-only** |
+| `thesis_optin` | `instrument_id` PK, `send_to_llm`, `updated_at` |
+| `alerts` | `id`, `rule`, `dedupe_key` UNIQUE, `instrument_id`, `title`, `detail`, `created_at`, `read_at` |
+| `alert_state` | `key` PK, `value` JSON (last known flag levels) |
+
+New settings sections:
+- `llm`: `outbound_enabled` **false** by default (privacy toggle), `model`, `monthly_call_cap` (30), `weekly_job` (false), `price_in_per_mtok` / `price_out_per_mtok` (4 / 20 for `claude-opus-5-5`, editable), `effort` (high).
+- `news`: the feed list.
+- `alerts`: rule toggles and the announcement categories to alert on.
+
+The API key and Groww secrets live only in `.env`; they are never in the DB, the UI or the logs.
+
+### 12.3 News
+- Rule categories, first match wins, keyword lists in `app/calc/news.py`:
+  results · order win / contract · dividend · board meeting · acquisition / merger ·
+  regulatory / legal · management change · rating action · other.
+- The LLM may only *suggest* a category for items the rules leave as "other", and only when
+  outbound LLM calls are enabled. Only the headline is sent. Origin MODEL is stored and shown.
+- Dedupe: identical URL, or headline token-set Jaccard ≥ 0.8 with an item for the same ISIN
+  within 3 days (normalised: lower case, no punctuation, stop words removed).
+- Retention: items with `published_at` older than 90 days are deleted on every refresh.
+- Tracked companies: direct stocks, plus the top 5 look-through holdings (by portfolio
+  exposure) of each fund with a disclosure. Funds without a disclosure show "No holdings
+  uploaded — fund news is not shown". Generic fund news is never shown.
+- Feed sort: company total exposure (direct + through funds), then recency. Filters: holding,
+  category, days.
+- Dashboard widget: "Recent events for my holdings" (last 7 days, max 8).
+
+### 12.4 Macro and sensitivity
+- `macro_values` keys:
+  - automated: `usd_inr`, `brent_usd`, `nifty50`;
+  - manual: `repo_rate`, `cpi_inflation`, plus any key the user adds.
+  - Manual values need a source note and an as-of date that is not in the future.
+- Sector sensitivity tags: `rate-sensitive`, `export/currency-exposed`,
+  `import/currency-exposed`, `foreign-currency assets`, `crude-input-exposed`,
+  `commodity-input-exposed`, `regulation-exposed`, `demand-cyclical`.
+  - A STARTER set for the sectors held ships labelled "general characteristics — review and
+    edit; not facts about any company"; edits become USER.
+- Scenario → tag map (code only, no LLM):
+  - rate cut / rate rise → rate-sensitive;
+  - weaker rupee → export/currency-exposed, import/currency-exposed, foreign-currency assets
+    (listed separately, because the pressure differs by tag);
+  - higher crude → crude-input-exposed;
+  - sector regulation → regulation-exposed;
+  - demand slowdown → demand-cyclical.
+  - The view lists the sectors and holdings carrying the tag and their combined look-through
+    weight, titled "Exposure by sensitivity tag" (not a forecast).
+
+### 12.5 LLM scenario analysis (`app/llm/`)
+- `LLMProvider` protocol: `name`, `model`, `complete_json(system, messages, schema, max_tokens) ->
+  (text, usage)`. `AnthropicProvider` (SDK) and `StubProvider` ("not configured" / tests).
+- Availability gate, checked before every call; the first failing check is shown:
+  1. privacy toggle on (`outbound_enabled`);
+  2. `ANTHROPIC_API_KEY` present;
+  3. monthly call cap not reached;
+  4. holding is a direct stock (funds and ETFs: "analysis not supported — see look-through").
+- **Input** (built only from stored data; every value has an `id`):
+  - holding: name, symbol, sector + source;
+  - portfolio: weight %, direct %, total look-through %;
+  - fundamentals: display value or "N/A (reason)", source, as-of;
+  - "within my portfolio" medians when they exist;
+  - news: last 30 days, max 10, with ids `n:<id>`;
+  - macro snapshot;
+  - the sector's sensitivity tags (with origin);
+  - thesis text only if opted in;
+  - the allowed scenario list.
+  - **Never** sent: rupee amounts, quantities, invested or P&L values, platform, account
+    details, other holdings' names, or journal text without opt-in. A test asserts this.
+- **Output** JSON schema (structured outputs; `additionalProperties: false`):
+  - `valuation_context[]`, `business_quality[]`, `key_risks[]`, `macro_sensitivity[]`,
+    `what_would_change_this_view[]`, `data_gaps[]`: each `{text, citations[≥1]}`;
+  - `scenarios[]`: `{scenario ∈ {rate_cut, rate_rise, weaker_rupee, higher_crude,
+    sector_regulation, demand_slowdown}, direction ∈ {upward pressure, downward pressure,
+    mixed, unclear}, because, citations[≥1]}`.
+  - Code renders: "If X happens, the likely direction of pressure on this holding is Y,
+    because Z."
+- **Guardrails** (`app/llm/validate.py`, tested); an output is rejected if:
+  - (a) any number in the output text is not in the input (numbers normalised; citation ids
+    excluded);
+  - (b) it contains banned wording: buy / sell / hold / accumulate / reduce / exit /
+    add more, target price, price target, fair value, upside / downside of, will
+    rise / fall / increase / decrease / go up / go down, multibagger, guaranteed;
+  - (c) any statement has no citation, or cites an id not in the input;
+  - (d) the JSON schema fails.
+  - On rejection it retries once with the errors listed. A second failure is stored as
+    FAILED with the reasons and **not shown as analysis**.
+- **Prompt** (`app/llm/prompts.py`, versioned `PROMPT_VERSION`): the model is told to
+  - give scenario and context analysis of one listed company for a private portfolio-analytics
+    tool;
+  - use only the provided input and cite input ids for every statement;
+  - copy numbers exactly from the input or use none;
+  - give no recommendations, price targets or predictions;
+  - describe direction of pressure, not outcomes;
+  - list missing data in `data_gaps`.
+- **Cache:** `input_hash = sha256(canonical input JSON + model + PROMPT_VERSION)`. A stored
+  analysis with the same hash is returned unless Refresh is clicked. Each card shows the
+  data-as-of, model and generation time, plus "View exactly what was sent" (the stored input
+  JSON and system prompt).
+- **Cost:** every call is logged in `llm_calls`; Settings shows calls this month vs the cap
+  and an estimated cost from token counts × the configured prices.
+- **Weekly job** (opt-in, Sundays): only holdings with news newer than their last analysis,
+  within the cap.
+
+### 12.6 Thesis journal
+- POST creates version n+1; there are no edit or delete endpoints (append-only).
+- Fields: why I hold it, what would change my view, horizon, review date, linked transactions
+  and change-log entries. Each new version writes a `THESIS_UPDATED` change-log entry.
+- "Review due": the latest version per holding with a review date ≤ today.
+- Opt-in per holding to include the latest thesis in LLM input (off by default).
+- Strategy vs actual (`GET /strategy?since=`), purely factual:
+  - targets and drift now;
+  - latest thesis notes;
+  - the snapshot on/after `since` vs today (compare);
+  - transactions and change-log entries since that date.
+
+### 12.7 Broker adapters (`app/brokers/`)
+- `BrokerAdapter` protocol: `name`, `holdings() -> list[BrokerHolding(isin, symbol, quantity,
+  avg_price)]`. There are no order methods; a test inspects the class and asserts no
+  order/modify/cancel/place attribute exists.
+- `FakeAdapter`, for tests.
+- `GrowwAdapter`, behind `GROWW_ENABLED=true`:
+  - its HTTP layer allow-lists exactly `POST /v1/token/api/access` and
+    `GET /v1/holdings/user`; any other path raises before sending (tested with a mock
+    transport that records requests);
+  - TOTP comes from `GROWW_TOTP_SECRET` (RFC 6238, stdlib, tested on RFC vectors) or a code
+    typed in the UI, which is used once and not stored;
+  - the token is kept in memory until its expiry and never logged.
+- `KiteMFAdapter`: a documented stub that raises NotImplementedError.
+- Reconciliation (pure): Groww-platform stocks/ETFs vs broker holdings by ISIN.
+  - Rows: missing in DB, missing at broker, quantity differs, average price differs
+    (> 0.5%). Differences only.
+  - "Add as transaction" opens a pre-filled in-app transaction form the user must confirm.
+    Nothing is written automatically.
+
+### 12.8 Alerts (in-app)
+Each rule is a toggle in Settings, and each alert is created once per dedupe key:
+- new announcement in a chosen category for a holding I own;
+- company-concentration / sector / overlap level changed (vs `alert_state`);
+- a disclosure became stale;
+- a thesis review date was reached.
+
+Alerts are evaluated after news refresh, price refresh and on page load. Mark-as-read only.
+
+### 12.9 Endpoints
+- News: `GET /news` · `POST /news/refresh` · `GET /news/recent` · `GET /news/sources`
+- Macro: `GET /macro` · `POST /macro/refresh` · `PUT/DELETE /macro/{key}`
+- Sensitivity: `GET /sensitivities` · `PUT /sensitivities/{sector}` · `GET /scenarios`
+- Analysis: `GET /analysis` · `POST /analysis/{iid}` (`?refresh=true`) · `GET /analysis/{iid}/preview` (input that would be sent, without calling) · `GET /llm/status`
+- Journal: `GET /journal` · `POST /journal/{iid}` · `PUT /journal/{iid}/optin` · `GET /journal/review-due` · `GET /strategy?since=`
+- Broker: `GET /broker/status` · `POST /broker/groww/token` · `GET /reconcile`
+- Alerts: `GET /alerts` · `POST /alerts/evaluate` · `POST /alerts/{id}/read`
+
+### 12.10 Pages
+`/news`, `/macro` (snapshot, sensitivity table, exposure by tag), `/analysis`, `/journal`,
+`/strategy`, `/reconcile`, `/alerts`; dashboard widget; Settings gains LLM, news feeds and
+alert rules. Analysis pages carry the footer "Scenario and context analysis, not a prediction
+or investment advice."
+
+### 12.11 Phase 4 assumptions
+1. Google News RSS cannot be used under the robots rule (see 12.1). Publisher RSS feeds plus
+   NSE's official feeds replace it.
+2. News relevance matching uses company names and symbols in headlines; a headline that
+   names a company only indirectly is missed rather than guessed.
+3. LLM analysis is for direct stocks only.
+4. The privacy toggle defaults to **off**; the app makes no LLM calls until you turn it on and
+   set a key.
+5. Refusal fallbacks (`fallbacks: "default"`) are enabled on LLM calls, so a safety decline is
+   retried on Anthropic's recommended fallback model; the card shows the model that served it.
+6. Reconciliation covers Groww stocks/ETFs only (Coin mutual funds have no adapter).
