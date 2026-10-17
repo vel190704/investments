@@ -375,7 +375,9 @@ class LlmAnalysis(Base):
     __tablename__ = "llm_analyses"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(10), default="stock", server_default="stock")  # stock | fund | portfolio
+    instrument_id: Mapped[int | None] = mapped_column(ForeignKey("instruments.id"), index=True)
+    requested_model: Mapped[str | None] = mapped_column(String(100))
     input_hash: Mapped[str] = mapped_column(String(64), index=True)
     input_json: Mapped[dict] = mapped_column(JSON)
     output_json: Mapped[dict | None] = mapped_column(JSON)
@@ -447,3 +449,84 @@ class AlertState(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[dict] = mapped_column(JSON)
+
+
+
+# ---------------- Phase 5
+class AnnualFinancial(Base):
+    """Annual statement lines per NSE symbol (own holdings and peers), from yfinance."""
+
+    __tablename__ = "annual_financials"
+    __table_args__ = (UniqueConstraint("symbol", "fiscal_year_end", "metric"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(50), index=True)
+    fiscal_year_end: Mapped[date] = mapped_column(Date)
+    metric: Mapped[str] = mapped_column(String(40))  # revenue|net_income|ebit|interest_expense|fcf|equity|total_debt|diluted_eps
+    value: Mapped[Decimal] = mapped_column(DecimalText)
+    source: Mapped[str] = mapped_column(String(200))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PeerSet(Base):
+    """User-maintained peers for one holding (max 8 NSE symbols). Nothing is seeded."""
+
+    __tablename__ = "peer_sets"
+
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), primary_key=True)
+    symbols: Mapped[list] = mapped_column(JSON, default=list)
+    note: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class PeerMetric(Base):
+    __tablename__ = "peer_metrics"
+    __table_args__ = (UniqueConstraint("symbol", "metric"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(50), index=True)
+    metric: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(10))  # OK | MISSING | REJECTED
+    value: Mapped[Decimal | None] = mapped_column(DecimalText)
+    note: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(200))
+    as_of: Mapped[date | None] = mapped_column(Date)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class QualitativeEntry(Base):
+    """Append-only, versioned qualitative notes per holding."""
+
+    __tablename__ = "qualitative_entries"
+    __table_args__ = (UniqueConstraint("instrument_id", "version"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    moat_type: Mapped[str] = mapped_column(String(40))
+    moat_note: Mapped[str] = mapped_column(Text)
+    capital_allocation_note: Mapped[str] = mapped_column(Text)
+    source_note: Mapped[str] = mapped_column(Text)
+    as_of: Mapped[date] = mapped_column(Date)
+    thesis_entry_id: Mapped[int | None] = mapped_column(ForeignKey("thesis_entries.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SourceEvent(Base):
+    __tablename__ = "source_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(60), index=True)
+    ok: Mapped[bool] = mapped_column(Boolean)
+    message: Mapped[str] = mapped_column(Text)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class SnapshotGap(Base):
+    """A calendar date with no snapshot because the app was not running. Never back-filled."""
+
+    __tablename__ = "snapshot_gaps"
+
+    gap_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    reason: Mapped[str] = mapped_column(String(200))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
