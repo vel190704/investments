@@ -70,6 +70,69 @@ def check_startup_config() -> None:
     if not dev_auth_active() and not st.supabase_url:
         raise RuntimeError("Authentication is required: set SUPABASE_URL (or, for local development only, "
                            "ENV=development and DEV_AUTH=1).")
+    check_preview_credentials()
+
+
+def supabase_ref_of_url(url: str) -> str | None:
+    """https://<ref>.supabase.co -> ref."""
+    from urllib.parse import urlparse
+
+    host = (urlparse(url.strip()).hostname or "").lower()
+    return host.removesuffix(".supabase.co") if host.endswith(".supabase.co") and host.count(".") == 2 else None
+
+
+def supabase_refs_of_database_url(url: str) -> set[str]:
+    """Project refs a Postgres URL points at: db.<ref>.supabase.co, or the pooler's user name <role>.<ref>."""
+    from sqlalchemy.engine import make_url
+
+    try:
+        u = make_url(url)
+    except Exception:
+        return set()
+    refs = set()
+    host = (u.host or "").lower()
+    if host.startswith("db.") and host.endswith(".supabase.co"):
+        refs.add(host.split(".")[1])
+    if host.endswith(".pooler.supabase.com") and u.username and "." in u.username:
+        refs.add(u.username.rsplit(".", 1)[1].lower())
+    return refs
+
+
+def _service_key_ref(key: str) -> str | None:
+    """Legacy service_role keys are JWTs naming their project ('ref'); newer sb_secret_ keys carry none."""
+    import jwt
+
+    try:
+        return jwt.decode(key, options={"verify_signature": False}).get("ref")
+    except Exception:
+        return None
+
+
+def check_preview_credentials() -> None:
+    """ENV=preview: refuse to start unless every Supabase credential belongs to an allowed (preview) project.
+    Messages name project refs only (not secret), never URLs or keys."""
+    if effective_env() != "preview":
+        return
+    st = get_settings()
+    allowed = {r.strip().lower() for r in st.preview_allowed_supabase_refs.split(",") if r.strip()}
+    if not allowed:
+        raise RuntimeError("ENV=preview needs PREVIEW_ALLOWED_SUPABASE_REFS (the preview Supabase project ref): "
+                           "a preview must never run with production credentials.")
+    ref = supabase_ref_of_url(st.supabase_url) if st.supabase_url else None
+    if st.supabase_url and ref not in allowed:
+        raise RuntimeError(f"SUPABASE_URL points at project {ref or '(not a supabase.co URL)'}, which is not on "
+                           "PREVIEW_ALLOWED_SUPABASE_REFS: refusing to start a preview with it.")
+    if st.database_url.startswith("postgres"):
+        refs = supabase_refs_of_database_url(st.database_url)
+        if not refs or not refs <= allowed:
+            where = f"project {', '.join(sorted(refs))}" if refs else "a database that is not a Supabase project"
+            raise RuntimeError(f"DATABASE_URL points at {where}, not at a project on PREVIEW_ALLOWED_SUPABASE_REFS: "
+                               "refusing to start.")
+    if st.supabase_service_role_key:
+        kref = _service_key_ref(st.supabase_service_role_key)
+        if kref is not None and kref.lower() not in allowed:
+            raise RuntimeError(f"SUPABASE_SERVICE_ROLE_KEY belongs to project {kref}, not on "
+                               "PREVIEW_ALLOWED_SUPABASE_REFS: refusing to start.")
 
 
 def admin_emails() -> set[str]:

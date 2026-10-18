@@ -7,7 +7,7 @@ BIN     := $(VENV)/bin
 FILE    ?= data/personal_investment_tracker_clean.xlsx
 
 
-.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals logs logs-errors pg-up test-postgres test-all-postgres test-pooler smoke release backup-prod restore-test reapply-deletions test-backup
+.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals logs logs-errors pg-up test-postgres test-all-postgres test-pooler smoke release backup-prod restore-test reapply-deletions test-backup audit audit-secrets audit-deps
 
 help:
 	@echo "make setup      install backend (venv) + frontend (npm) dependencies"
@@ -29,6 +29,7 @@ help:
 	@echo "make restore-test       restore the latest dump into a throwaway Postgres and verify it"
 	@echo "make reapply-deletions REGISTER=path   after a restore: delete again everyone in the register"
 	@echo "make test-backup        backup/restore/register tests against a synthetic database (CI)"
+	@echo "make audit              gitleaks over the full git history + pip-audit + npm audit (CI: Security audit)"
 	@echo "make logs       follow logs/app.log (Ctrl-C to stop)"
 	@echo "make logs-errors  follow WARNING and above only"
 
@@ -145,3 +146,16 @@ reapply-deletions:
 
 test-backup:
 	cd backend && TEST_POSTGRES_URL=$(PG_TEST_URL) .venv/bin/python -m pytest -q -p no:warnings tests/test_backup.py
+
+# Security audit (also in CI). Secrets over the full history: blocking; reviewed false positives in .gitleaksignore.
+GITLEAKS_IMAGE := ghcr.io/gitleaks/gitleaks:v8.24.3
+audit: audit-secrets audit-deps
+
+audit-secrets:
+	docker run --rm -v "$(CURDIR)":/repo:ro $(GITLEAKS_IMAGE) git /repo --redact --no-banner
+
+# Production dependencies: blocking. Full npm tree incl. build tooling: report only (docs/SECURITY.md).
+audit-deps:
+	cd backend && .venv/bin/pip-audit --progress-spinner off -r requirements.txt -r requirements-dev.txt
+	cd frontend && npm audit --omit=dev --audit-level=high
+	cd frontend && npm audit --audit-level=high || echo "npm audit (incl. dev tooling): findings above are report-only; see docs/SECURITY.md"

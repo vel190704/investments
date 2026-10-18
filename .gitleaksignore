@@ -1,0 +1,9 @@
+# gitleaks findings reviewed and accepted (make audit / CI "Security audit"). One fingerprint per line; each is a
+# synthetic test value, never a real credential. A NEW finding still fails the scan.
+# test-only HS256 secret for signing fake Supabase tokens in tests
+084eaab22aed90fc25b00dcfd2c95a5b9ac5fdef:backend/tests/test_auth_accounts.py:generic-api-key:16
+# sample input of the log redaction test (it must be redacted)
+fed19558720ca8e3ff13762410cdeb6d5e09e9e1:backend/tests/test_logging.py:generic-api-key:30
+# RFC 6238 published test vector (base32 of "12345678901234567890"), in broker tests removed in Phase 5
+e6ccade690a65528df5f08dfe46fee97ea32f56f:backend/tests/test_broker.py:generic-api-key:29
+e6ccade690a65528df5f08dfe46fee97ea32f56f:backend/tests/test_broker.py:generic-api-key:51

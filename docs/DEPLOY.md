@@ -213,6 +213,7 @@ Backend (Render). The same names in both services, with each environment's own v
 | `SUPABASE_URL` | prod project | preview project | |
 | `SUPABASE_JWT_SECRET` | only if legacy | only if legacy | |
 | `SUPABASE_SERVICE_ROLE_KEY` | optional | optional | backend only; enables invite emails |
+| `PREVIEW_ALLOWED_SUPABASE_REFS` | — | the preview project ref | **required in preview**: refuses to start if `SUPABASE_URL`, `DATABASE_URL` or the service key belong to any other project |
 | `ADMIN_EMAILS` | your email | your email | |
 | `CORS_ORIGINS` | Vercel prod URL / domain | (optional) | exact origins, comma-separated |
 | `CORS_ORIGIN_REGEX` | — | Vercel preview URL pattern | |
@@ -233,6 +234,11 @@ Frontend (Vercel), per scope:
 | `NEXT_PUBLIC_SUPABASE_URL` | prod project URL | preview project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | prod publishable key | preview publishable key |
 | `NEXT_PUBLIC_BACKUP_RETENTION_DAYS` | your plan's backup retention | same or preview's |
+| `NEXT_PUBLIC_PREVIEW_SUPABASE_REFS` | — | the preview project ref | sign-in disabled in a preview pointing at any other project |
+
+The frontend check relies on Vercel's `NEXT_PUBLIC_VERCEL_ENV` (Project › Settings › Environment Variables ›
+"Automatically expose System Environment Variables", on by default; ⚠ verify it is on). The backend check is the one
+that protects the data and needs nothing from Vercel.
 
 Never set on Vercel: `NEXT_PUBLIC_DEV_AUTH`, `BACKEND_URL`, or any secret. Everything `NEXT_PUBLIC_*` is visible in
 the browser.

@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     supabase_jwt_secret: str = ""  # legacy HS256 secret (only if the project still uses it)
     supabase_jwt_audience: str = "authenticated"
     supabase_service_role_key: str = ""  # optional, server-side only: sends invite emails from the admin page
+    # ENV=preview only: the Supabase project refs a preview may use (comma-separated). SUPABASE_URL, DATABASE_URL and
+    # the service key must all belong to one of them, or the app refuses to start (no production credentials in
+    # preview; app/auth.py::check_preview_credentials). Empty in preview = refuse.
+    preview_allowed_supabase_refs: str = ""
     field_encryption_key: str = ""  # Fernet key for users' own AI keys (optional feature)
     # internet-facing (6b)
     cors_origins: str = ""  # comma-separated exact origins, e.g. the Vercel production URL

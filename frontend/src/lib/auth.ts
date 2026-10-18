@@ -6,6 +6,7 @@
 
 import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
+import { previewProblem } from "./envguard";
 
 // Static references: Next.js inlines NEXT_PUBLIC_* values at build time.
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -13,11 +14,14 @@ const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 // Fail closed: sign-in is required unless NEXT_PUBLIC_DEV_AUTH is exactly "1" (local `make dev` sets it).
 export const AUTH_MODE: "dev" | "supabase" = process.env.NEXT_PUBLIC_DEV_AUTH === "1" ? "dev" : "supabase";
 export const PUBLIC_PATHS = ["/login", "/auth/callback", "/terms"];
+/** Set in a Vercel preview that points at a Supabase project not on its allow-list: sign-in is then disabled. */
+export const PREVIEW_PROBLEM = previewProblem(process.env.NEXT_PUBLIC_VERCEL_ENV, SUPABASE_URL,
+                                              process.env.NEXT_PUBLIC_PREVIEW_SUPABASE_REFS);
 
 let client: SupabaseClient | null = null;
 
 export function supabase(): SupabaseClient | null {
-  if (AUTH_MODE !== "supabase" || !SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+  if (AUTH_MODE !== "supabase" || !SUPABASE_URL || !SUPABASE_ANON_KEY || PREVIEW_PROBLEM) return null;
   if (!client) {
     client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: { flowType: "pkce", persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
@@ -35,6 +39,7 @@ export async function accessToken(): Promise<string | null> {
 
 /** Invite-only: shouldCreateUser=false, so an email that was not invited gets no account. */
 export async function sendMagicLink(email: string): Promise<string | null> {
+  if (PREVIEW_PROBLEM) return PREVIEW_PROBLEM;
   const sb = supabase();
   if (!sb) return "Sign-in is not configured (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY).";
   const { error } = await sb.auth.signInWithOtp({
