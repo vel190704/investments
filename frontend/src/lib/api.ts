@@ -203,6 +203,8 @@ export type Settings = {
     news: SettingsSection<{ feeds: { name: string; url: string }[] }>;
     alerts: SettingsSection<{ announcement: boolean; announcement_categories: string[]; concentration_change: boolean;
                               disclosure_stale: boolean; review_due: boolean }>;
+    live: SettingsSection<{ enabled: boolean; poll_seconds: number }>;
+    market_holidays: SettingsSection<{ holidays: { date: string; name: string }[] }>;
   };
 };
 export type PlanLineOut = {
@@ -470,3 +472,24 @@ export function useApi<T>(path: string) {
   }, []);
   return { data, error, loading, reload };
 }
+
+// ---- live intraday prices ----
+export type LiveRowT = {
+  instrument_id: number; symbol: string; name: string; asset_type: string; quantity: string;
+  price: string | null; quote_ts: string | null; source: string | null; stale: boolean; error: string | null;
+  prev_close: string | null; prev_close_date: string | null; day_change: string | null; day_change_pct: string | null;
+  value_paise: number | null; last_close: string | null; last_close_date: string | null; last_close_source: string | null;
+  spark: { ts: string; price: string }[];
+};
+export type LiveView = {
+  enabled: boolean; poll_seconds: number; stale_after_s: number; source: string;
+  market: { open: boolean; label: string; reason: string; session_date: string; next_open: string; closes_at: string | null; hours: string };
+  holidays_entered: number; holiday_note: string;
+  last_cycle: { ran: boolean; at: string; manual: boolean; requested: number; succeeded: number; failed: number;
+                duration_ms: number; next_interval_s: number } | null;
+  rows: LiveRowT[];
+  totals: { value_paise: number; day_pnl_paise: number | null; day_pnl_pct: string | null; included: number[];
+            excluded: { instrument_id: number; name: string; reason: string }[]; no_previous_close: string[] } | null;
+  series: { ts: string; value_paise: number }[]; series_note: string;
+  funds: { note: string; count: number; value_paise: number | null; nav_dates: string[]; unpriced: string[] };
+};

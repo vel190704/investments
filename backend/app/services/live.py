@@ -206,7 +206,9 @@ def live_view(s: Session, now: datetime | None = None) -> dict:
                        "minutes before a holding's first trade today are omitted. Ticks never feed snapshots, XIRR "
                        "or history.",
         "funds": {"note": MF_NOTE, "count": len(funds),
-                  "value_paise": sum(r.value_paise or 0 for r in funds) if funds else 0,
+                  "value_paise": sum(r.value_paise for r in funds if r.value_paise is not None)
+                  if any(r.value_paise is not None for r in funds) else None,
+                  "unpriced": [r.inst.name for r in funds if r.value_paise is None],
                   "nav_dates": sorted({r.quote.price_date.isoformat() for r in funds if r.quote})},
         "source": provider.SOURCE,
     }

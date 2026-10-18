@@ -27,6 +27,10 @@ export default function SettingsPage() {
       {data && (
         <div className="flex flex-col gap-4">
           <AiSettings s={data} onSaved={reload} />
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <LiveSettings s={data} onSaved={reload} />
+            <MarketHolidays s={data} onSaved={reload} />
+          </div>
           <Targets s={data} onSaved={reload} />
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Drift s={data} onSaved={reload} />
@@ -604,5 +608,72 @@ function AlertRules({ s, onSaved }: { s: Settings; onSaved: () => void }) {
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-3"><Button disabled={busy} onClick={() => save(r)}>Save rules</Button>{feedback}</div>
     </Section>
+  );
+}
+
+function LiveSettings({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+  const v = s.sections.live.value;
+  const [enabled, setEnabled] = useState(v.enabled);
+  const [poll, setPoll] = useState(String(v.poll_seconds));
+  const { save, busy, feedback } = useSaver("live", onSaved);
+  return (
+    <Section title="Live prices" aside={v.enabled ? "On" : "Off"}>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-1" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        <span>Poll intraday quotes for direct stocks and ETFs during market hours (09:15–15:30 IST, Mon–Fri, excluding
+          the holidays listed here), only while a page showing live prices is open. Mutual funds are never polled.</span>
+      </label>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <Field label="Poll interval (seconds)" hint="30–300; one batched request per interval">
+          <Input inputMode="numeric" className="w-28" value={poll} onChange={(e) => setPoll(e.target.value.replace(/\D/g, ""))} />
+        </Field>
+        <Button disabled={busy} onClick={() => save({ enabled, poll_seconds: Number(poll) })}>Save</Button>
+        {feedback}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        A quote older than two intervals is marked delayed/stale and left out of live totals. Quotes are real 1-minute
+        bars from Yahoo Finance (may be delayed); nothing is simulated. Intraday data is kept 14 days and never used
+        for snapshots, XIRR or history.
+      </p>
+    </Section>
+  );
+}
+
+function MarketHolidays({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+  const [rows, setRows] = useState(s.sections.market_holidays.value.holidays);
+  const [date, setDate] = useState("");
+  const [name, setName] = useState("");
+  const { save, busy, feedback } = useSaver("market_holidays", onSaved);
+  const add = () => {
+    if (!date || !name.trim()) return;
+    setRows([...rows.filter((r) => r.date !== date), { date, name: name.trim() }].sort((a, b) => a.date.localeCompare(b.date)));
+    setDate("");
+    setName("");
+  };
+  return (
+    <section id="market-holidays">
+      <Section title="Market holidays (NSE)" aside={`${rows.length} entered`}>
+        <p className="text-xs text-status-moderate">
+          Enter these by hand and verify them against the NSE holiday list (nseindia.com › Resources › Exchange
+          Communication › Holidays). Nothing is scraped. Until a holiday is entered, that weekday is treated as a trading day.
+        </p>
+        <ul className="mt-2 flex flex-col text-sm">
+          {rows.length === 0 && <li className="text-muted-foreground">No holidays entered.</li>}
+          {rows.map((r) => (
+            <li key={r.date} className="flex items-center justify-between border-b border-border py-1 last:border-0">
+              <span className="tnum">{r.date} · {r.name}</span>
+              <button className="text-xs underline" onClick={() => setRows(rows.filter((x) => x.date !== r.date))}>remove</button>
+            </li>
+          ))}
+        </ul>
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <Field label="Date"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+          <Field label="Name"><Input placeholder="e.g. Diwali Laxmi Pujan" value={name} onChange={(e) => setName(e.target.value)} /></Field>
+          <Button variant="outline" onClick={add}>Add</Button>
+          <Button disabled={busy} onClick={() => save({ holidays: rows })}>Save holidays</Button>
+          {feedback}
+        </div>
+      </Section>
+    </section>
   );
 }

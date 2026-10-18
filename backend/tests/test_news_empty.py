@@ -69,3 +69,10 @@ def test_filtered_empty_view_says_so(session, workbook):
     from app.services.news import feed
 
     assert feed(session, category="results")["empty"]["kind"] == "FILTERED"
+
+
+def test_counts_unknown_from_before_they_were_recorded_are_not_zero():
+    legacy = {"source": "ET Markets", "ok": True, "items_fetched": None, "items_matched": None, "message": "ok (50 items)"}
+    e = empty_explanation([legacy], tracked=0, untracked=14, days=30)
+    assert e["message"].startswith("Items fetched, none matched because no holdings are tracked")
+    assert empty_explanation([legacy], tracked=5, untracked=0, days=30)["kind"] == "NO_MATCHES"

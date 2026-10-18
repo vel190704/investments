@@ -3,7 +3,9 @@
 import { EmptyState, ErrorBox, Loading, Notice, PageHeader } from "@/components/common";
 import { RefreshButton } from "@/components/refresh-button";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useApi, type Holding, type Holdings } from "@/lib/api";
+import { LiveCell, LiveHeader } from "@/components/live";
+import { useApi, type Holding, type Holdings, type LiveRowT, type LiveView } from "@/lib/api";
+import { useLive } from "@/lib/live";
 import { formatDate, formatDateTime, formatINR, formatPct, formatPrice, formatQty, signClass } from "@/lib/format";
 
 export function HoldingsPage({ kind }: { kind: "equity" | "funds" }) {
@@ -15,6 +17,8 @@ export function HoldingsPage({ kind }: { kind: "equity" | "funds" }) {
   const investedPriced = priced.reduce((a, r) => a + r.invested_paise, 0);
   const value = priced.reduce((a, r) => a + (r.value_paise ?? 0), 0);
   const weight = priced.reduce((a, r) => a + Number(r.weight ?? 0), 0);
+  const live = useLive();
+  const liveRows = new Map((live.data?.rows ?? []).map((r) => [r.instrument_id, r]));
 
   return (
     <>
@@ -32,6 +36,8 @@ export function HoldingsPage({ kind }: { kind: "equity" | "funds" }) {
       {data && !data.equity.length && !data.mutual_funds.length && <EmptyState />}
       {data && rows.length > 0 && (
         <div className="flex flex-col gap-3">
+          {!isMF && <LiveHeader live={live} compact />}
+          {isMF && live.data && <Notice>{live.data.funds.note}</Notice>}
           {rows.some((r) => r.opening_only) && (
             <Notice>
               Rows marked “opening” come from OPENING balances: they count toward quantity, invested amount, value and
@@ -45,7 +51,8 @@ export function HoldingsPage({ kind }: { kind: "equity" | "funds" }) {
                   <TableHead>{isMF ? "Fund" : "Instrument"}</TableHead>
                   <TableHead className="text-right">{isMF ? "Units" : "Qty"}</TableHead>
                   <TableHead className="text-right">Avg cost</TableHead>
-                  <TableHead className="text-right">{isMF ? "NAV" : "Price"}</TableHead>
+                  <TableHead className="text-right">{isMF ? "NAV" : "Price (end of day)"}</TableHead>
+                  {!isMF && <TableHead className="text-right">{live.data?.market.open && live.data.enabled ? "Live · today" : "Live"}</TableHead>}
                   <TableHead className="text-right">Invested</TableHead>
                   <TableHead className="text-right">Current value</TableHead>
                   <TableHead className="text-right">P&L</TableHead>
@@ -55,12 +62,13 @@ export function HoldingsPage({ kind }: { kind: "equity" | "funds" }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((h) => <Row key={h.instrument_id} h={h} isMF={isMF} />)}
+                {rows.map((h) => <Row key={h.instrument_id} h={h} isMF={isMF} live={liveRows.get(h.instrument_id)} view={live.data} />)}
               </TableBody>
               <TableFooter>
                 <TableRow>
                   <TableCell className="font-medium">Total ({rows.length})</TableCell>
                   <TableCell /><TableCell /><TableCell />
+                  {!isMF && <TableCell />}
                   <TableCell className="text-right">{formatINR(invested)}</TableCell>
                   <TableCell className="text-right">{priced.length ? formatINR(value) : "Data unavailable"}</TableCell>
                   <TableCell className={`text-right ${signClass(value - investedPriced)}`}>
@@ -84,7 +92,7 @@ export function HoldingsPage({ kind }: { kind: "equity" | "funds" }) {
   );
 }
 
-function Row({ h, isMF }: { h: Holding; isMF: boolean }) {
+function Row({ h, isMF, live, view }: { h: Holding; isMF: boolean; live?: LiveRowT; view: LiveView | null }) {
   const priceDecimals = isMF ? 4 : 2;
   return (
     <TableRow>
@@ -110,6 +118,7 @@ function Row({ h, isMF }: { h: Holding; isMF: boolean }) {
           <span className="text-xs text-muted-foreground whitespace-normal">{h.unavailable_reason}</span>
         )}
       </TableCell>
+      {!isMF && <TableCell className="text-right"><LiveCell r={live} view={view} /></TableCell>}
       <TableCell className="text-right">{formatINR(h.invested_paise)}</TableCell>
       <TableCell className="text-right">{h.value_paise === null ? "Data unavailable" : formatINR(h.value_paise)}</TableCell>
       <TableCell className={`text-right ${signClass(h.pnl_paise)}`}>

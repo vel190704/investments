@@ -96,6 +96,8 @@ def empty_explanation(sources: list[dict], tracked: int, untracked: int, days: i
     failed = [{"source": x["source"], "message": x["message"]} for x in sources if not x["ok"]]
     ok = [x for x in sources if x["ok"]]
     fetched = sum(x.get("items_fetched") or 0 for x in ok)
+    known = all(x.get("items_fetched") is not None for x in ok)  # rows from before counts were recorded: unknown
+    items = _n(fetched, "item", "items") if known else "Items"
     tail = f" {_n(len(failed), 'source', 'sources')} failed (see below)." if failed else ""
     if not sources:
         kind, msg = "NOT_FETCHED", "News has not been fetched yet. Click Refresh."
@@ -104,12 +106,12 @@ def empty_explanation(sources: list[dict], tracked: int, untracked: int, days: i
         msg = f"All {_n(len(failed), 'source', 'sources')} failed, so there was nothing to match. Reasons below."
     elif tracked == 0:
         kind = "NO_TRACKED_HOLDINGS"
-        msg = (f"{_n(fetched, 'item', 'items')} fetched, none matched because no holdings are tracked: confirm ISINs "
+        msg = (f"{items} fetched, none matched because no holdings are tracked: confirm ISINs "
                f"on Mappings ({_n(untracked, 'stock', 'stocks')} waiting).{tail}")
-    elif fetched == 0:
+    elif known and fetched == 0:
         kind, msg = "NO_ITEMS", f"Sources answered but returned 0 items.{tail}"
     else:
         kind = "NO_MATCHES"
-        msg = (f"{_n(fetched, 'item', 'items')} fetched from {_n(len(ok), 'source', 'sources')}; none were about your "
+        msg = (f"{items} fetched from {_n(len(ok), 'source', 'sources')}; none were about your "
                f"{_n(tracked, 'tracked company', 'tracked companies')} in the last {days} days.{tail}")
     return {"kind": kind, "message": msg, "failed": failed}

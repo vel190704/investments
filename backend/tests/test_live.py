@@ -213,3 +213,9 @@ def test_tick_queries_are_timezone_safe(session, workbook):
     assert len(repo.ticks_since(session, session_start_ist)) == 32
     assert repo.ticks_since(session, datetime(2026, 10, 19, 11, 0, tzinfo=IST)) == []  # 05:30 UTC > 05:29 bars
     assert repo.prune_ticks(session, datetime(2026, 10, 19, 10, 59, tzinfo=IST)) == 16  # the 10:58 IST bars
+
+
+def test_unpriced_funds_are_data_unavailable_not_zero(session, workbook):
+    import_workbook(session, workbook)  # no NAVs stored
+    v = live.live_view(session, SAT)
+    assert v["funds"]["value_paise"] is None and len(v["funds"]["unpriced"]) == 3

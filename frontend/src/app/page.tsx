@@ -4,6 +4,7 @@ import Link from "next/link";
 import { AssetDonut } from "@/components/asset-donut";
 import { EmptyState, ErrorBox, FlagRow, Loading, Notice, PageHeader, Section, SourceNote, Stat } from "@/components/common";
 import { GrowthChart } from "@/components/growth-chart";
+import { LivePanel } from "@/components/live";
 import { RefreshButton } from "@/components/refresh-button";
 import { useApi, type Mappings, type NewsItem, type Series, type Summary } from "@/lib/api";
 import { formatDate, formatDateTime, formatINR, formatPct, signClass } from "@/lib/format";
@@ -85,6 +86,8 @@ export default function Dashboard() {
               Realised P&L {formatINR(s.realised_paise, { signed: true })} · Dividends {formatINR(s.dividends_paise)}
             </p>
           )}
+
+          <LivePanel />
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Section title="Asset-class allocation" aside="Weight = market value / total value">
