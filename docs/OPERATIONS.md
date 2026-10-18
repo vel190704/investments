@@ -116,3 +116,57 @@ make reapply-deletions REGISTER=~/private/deletions.csv
 Everyone in the register who exists in the restored database is deleted again, with all their data, invitation and
 (if `SUPABASE_SERVICE_ROLE_KEY` is set) sign-in account. It's safe to run twice. Tested end to end: delete Bob →
 restore a dump made before → Bob is back → re-apply → Bob is gone, everyone else's totals unchanged.
+
+## 2. Uptime and cold starts
+
+### 2.1 An external uptime monitor
+
+Use any external HTTP monitor, e.g. **UptimeRobot**, **Better Stack (Uptime)** or **cron-job.org**. The free tiers are
+enough. Settings:
+
+| setting | value |
+|---|---|
+| URL | `https://<your Render service>/api/health` (production; optionally a second monitor for preview) |
+| method / interval | GET, every 5 minutes |
+| expect | HTTP **200** with body `{"status":"ok"}` |
+| alert | email to you after 2 failed checks in a row |
+
+`/api/health` is public and reveals nothing: `{"status":"ok"}` when the app is up and its database answers. It returns
+HTTP **503** `{"status":"unavailable"}` when the app is up but the database is not (e.g. Supabase paused or
+unreachable), and no answer at all when the app is down or asleep. It is excluded from rate limits and logged at
+DEBUG only, so monitoring doesn't fill the logs. No key or token is needed; never put one in the monitor.
+
+### 2.2 What to expect on the Render plan (⚠ verify on your plan)
+
+- **Starter (the recommended production type, DEPLOY.md §4):** always on. The only restarts are deploys, your manual
+  restarts and Render maintenance. Each takes well under a minute. Requests during a restart may fail briefly; the app
+  retries reads on its own (below).
+- **Free:** at the time of writing the service **sleeps after about 15 minutes without requests** and wakes on the next
+  one. That takes roughly 30–60 seconds. Free instance hours per month are limited. While it sleeps, nothing runs:
+  no daily refresh, no live prices. A 5-minute monitor keeps it awake (using up the free hours faster); check
+  Render's current terms before relying on that.
+
+**What people see during a cold start:** a bar at the top says *"The server is waking up (it sleeps when nobody has
+used it for a while). This usually takes under a minute."* with **Retry now**. Pages that only read data retry by
+themselves: after 1, 2, 4 and 8 seconds, then every 15 seconds, for up to 90 seconds. After that the bar says *"The
+server is not responding right now…"* with **Retry**.
+
+Saving (POST/PUT/DELETE) is never retried automatically, because it might have gone through. The person sees
+*"…Your change was probably not saved: check, then try again in a minute."* An answer from the app itself (any
+response with an `X-Request-ID`, including its own 503) is shown as the normal error with its request id. Only the
+proxy's 502/503/504 or no answer at all count as "waking up" (`frontend/src/lib/wake.ts`, tested).
+
+### 2.3 Scheduled jobs after downtime
+
+The daily job (prices, NAVs, everyone's snapshot; 23:30 IST, `REFRESH_HOUR`/`REFRESH_MINUTE`) and live polling run
+inside the backend process. Only one instance runs each job, under a database advisory lock. If the process was down
+or asleep at 23:30:
+1. On the next start, **catch-up** runs (`app/services/catchup.py`). It records every missed calendar date as a
+   **snapshot gap** ("no snapshot: the app was not running"), then fetches current prices and takes today's snapshot
+   for everyone.
+2. Charts break the line at gaps. Nothing is interpolated or back-filled, ever: a missed day stays missed.
+3. Live intraday polling simply resumes when someone has the app open during market hours. Missed ticks are not
+   recreated.
+
+A restart within the same day (e.g. a deploy at 23:35 that interrupted the job) just takes the missing snapshot on start.
+Long outages show up as gaps, so you can see them on the History page and in **Sources › health**.

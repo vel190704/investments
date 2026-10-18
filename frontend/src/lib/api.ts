@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { BACKEND_DOWN, messageFromBody, messageFromText, withSuffix } from "./apierror";
 import { AUTH_MODE, PUBLIC_PATHS, accessToken } from "./auth";
+import { ServerUnavailable, withWake } from "./wake";
 
 // ---- types (money: integer paise; decimals: strings) ----
 export type Xirr = { rate: string | null; note: string | null };
@@ -427,11 +428,15 @@ async function send(path: string, init: RequestInit = {}): Promise<Response> {
   const token = await accessToken();
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
+  const method = (init.method ?? "GET").toUpperCase();
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, { ...init, headers });
-  } catch {
-    throw new ApiError(BACKEND_DOWN, 0, null, BACKEND_DOWN);  // network error: the app server is not reachable
+    res = await withWake(() => fetch(`${API_BASE}${path}`, { ...init, headers }), method);
+  } catch (e) {
+    if (!(e instanceof ServerUnavailable)) throw e;
+    // local dev without the backend: say how to start it
+    const msg = !process.env.NEXT_PUBLIC_API_URL && e.status === 0 ? BACKEND_DOWN : e.message;
+    throw new ApiError(msg, e.status, null, msg);
   }
   if (res.status === 401 && AUTH_MODE === "supabase" && typeof window !== "undefined"
       && !PUBLIC_PATHS.includes(window.location.pathname)) {
