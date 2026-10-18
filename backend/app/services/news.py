@@ -86,12 +86,14 @@ def tracked_companies(s: Session) -> tuple[list[Tracked], list[dict], list[dict]
     return sorted(out.values(), key=lambda t: -t.exposure), untracked, fund_notes
 
 
-def _status(s: Session, source: str, isin: str | None, ok: bool, message: str) -> None:
+def _status(s: Session, source: str, isin: str | None, ok: bool, message: str,
+            fetched: int | None = None, matched: int | None = None) -> None:
     row = s.scalar(select(NewsSourceStatus).where(NewsSourceStatus.source == source, NewsSourceStatus.isin == isin))
     if row is None:
         row = NewsSourceStatus(source=source, isin=isin)
         s.add(row)
     row.ok, row.message, row.checked_at = ok, message, utcnow()
+    row.items_fetched, row.items_matched = (fetched, matched) if ok else (None, None)
 
 
 def _store(s: Session, t: Tracked, item: src.RawItem, report: dict) -> None:
@@ -123,12 +125,17 @@ def refresh_news(s: Session, client: PoliteClient | None = None, now: datetime |
     # 1) NSE official announcement feeds — matched by NSE symbol from the filing link
     by_symbol = {t.symbol.upper(): t for t in tracked if t.symbol}
     items, errors = src.fetch_nse(client)
-    for name in src.NSE_FEEDS:
-        _status(s, name, None, name not in errors, errors.get(name, "ok"))
+    nse_fetched: dict[str, int] = {}
+    nse_matched: dict[str, int] = {}
     for it in items:
+        nse_fetched[it.source] = nse_fetched.get(it.source, 0) + 1
         t = by_symbol.get((it.symbol_hint or "").upper())
         if t and it.published_at >= cutoff:
             _store(s, t, it, report)
+            nse_matched[it.source] = nse_matched.get(it.source, 0) + 1
+    for name in src.NSE_FEEDS:
+        _status(s, name, None, name not in errors, errors.get(name, "ok"), nse_fetched.get(name, 0),
+                nse_matched.get(name, 0))
     report["sources"]["NSE"] = {"items": len(items), "errors": errors}
     from app.services.source_health import record
 
@@ -139,7 +146,6 @@ def refresh_news(s: Session, client: PoliteClient | None = None, now: datetime |
     for feed in (st.get(s, "news") or {}).get("feeds", src.DEFAULT_PUBLISHER_FEEDS):
         try:
             feed_items = src.fetch_publisher(client, feed["name"], feed["url"])
-            _status(s, feed["name"], None, True, f"ok ({len(feed_items)} items)")
             record(s, f"News feed: {feed['name']}", True, f"{len(feed_items)} items")
         except (SourceUnavailable, ValueError) as e:
             _status(s, feed["name"], None, False, str(e))
@@ -152,6 +158,7 @@ def refresh_news(s: Session, client: PoliteClient | None = None, now: datetime |
             if hits and it.published_at >= cutoff:
                 _store(s, max(hits, key=lambda t: t.exposure), it, report)  # one row per URL: most-exposed company
                 matched += 1
+        _status(s, feed["name"], None, True, f"ok ({len(feed_items)} items)", len(feed_items), matched)
         report["sources"][feed["name"]] = {"items": len(feed_items), "matched": matched}
 
     # 3) Google News RSS (requested) — refused by robots.txt; recorded per holding as unavailable
@@ -205,7 +212,9 @@ def feed(s: Session, isin: str | None = None, category: str | None = None, days:
     for row in s.scalars(select(NewsSourceStatus)):
         if row.isin is None:
             statuses.setdefault("_sources", []).append({"source": row.source, "ok": row.ok, "message": row.message,
-                                                        "checked_at": as_utc(row.checked_at).isoformat()})
+                                                        "checked_at": as_utc(row.checked_at).isoformat(),
+                                                        "items_fetched": row.items_fetched,
+                                                        "items_matched": row.items_matched})
         elif not row.ok:
             statuses.setdefault(row.isin, []).append({"source": row.source, "message": row.message})
     return {
@@ -214,6 +223,10 @@ def feed(s: Session, isin: str | None = None, category: str | None = None, days:
                        "direct": t.instrument_id is not None, "via_funds": t.via_funds,
                        "unavailable": statuses.get(t.isin, [])} for t in tracked],
         "untracked": untracked, "funds": fund_notes, "sources": statuses.get("_sources", []),
+        "empty": None if items else (
+            {"kind": "FILTERED", "message": f"No items match these filters in the last {days} days.", "failed": []}
+            if (isin or category) else
+            nc.empty_explanation(statuses.get("_sources", []), len(tracked), len(untracked), days)),
         "categories": nc.CATEGORIES,
         "basis": "Sorted by your total exposure to the company (direct + through funds), then newest first. "
                  "Titles and summaries are the source's own text.",

@@ -83,3 +83,33 @@ def mentions(title: str, patterns: list[re.Pattern]) -> bool:
 def rank_feed(items: list[dict], exposure_by_isin: dict[str, float]) -> list[dict]:
     """Most portfolio-relevant first: company total exposure (desc), then newest first."""
     return sorted(items, key=lambda i: (-exposure_by_isin.get(i["isin"], 0.0), -i["published_ts"]))
+
+
+
+def _n(count: int, one: str, many: str) -> str:
+    return f"{count} {one if count == 1 else many}"
+
+
+def empty_explanation(sources: list[dict], tracked: int, untracked: int, days: int) -> dict:
+    """Why the news feed is empty. sources: last-refresh status per whole source
+    ({source, ok, items_fetched, items_matched, message})."""
+    failed = [{"source": x["source"], "message": x["message"]} for x in sources if not x["ok"]]
+    ok = [x for x in sources if x["ok"]]
+    fetched = sum(x.get("items_fetched") or 0 for x in ok)
+    tail = f" {_n(len(failed), 'source', 'sources')} failed (see below)." if failed else ""
+    if not sources:
+        kind, msg = "NOT_FETCHED", "News has not been fetched yet. Click Refresh."
+    elif not ok:
+        kind = "SOURCES_FAILED"
+        msg = f"All {_n(len(failed), 'source', 'sources')} failed, so there was nothing to match. Reasons below."
+    elif tracked == 0:
+        kind = "NO_TRACKED_HOLDINGS"
+        msg = (f"{_n(fetched, 'item', 'items')} fetched, none matched because no holdings are tracked: confirm ISINs "
+               f"on Mappings ({_n(untracked, 'stock', 'stocks')} waiting).{tail}")
+    elif fetched == 0:
+        kind, msg = "NO_ITEMS", f"Sources answered but returned 0 items.{tail}"
+    else:
+        kind = "NO_MATCHES"
+        msg = (f"{_n(fetched, 'item', 'items')} fetched from {_n(len(ok), 'source', 'sources')}; none were about your "
+               f"{_n(tracked, 'tracked company', 'tracked companies')} in the last {days} days.{tail}")
+    return {"kind": kind, "message": msg, "failed": failed}

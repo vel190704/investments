@@ -320,7 +320,9 @@ export type NewsFeed = {
                unavailable: { source: string; message: string }[] }[];
   untracked: { instrument_id: number; name: string; reason: string }[];
   funds: { fund: string; companies: string[]; note: string }[];
-  sources: { source: string; ok: boolean; message: string; checked_at: string }[];
+  sources: { source: string; ok: boolean; message: string; checked_at: string; items_fetched: number | null; items_matched: number | null }[];
+  empty: { kind: "FILTERED" | "NOT_FETCHED" | "SOURCES_FAILED" | "NO_TRACKED_HOLDINGS" | "NO_ITEMS" | "NO_MATCHES"; message: string;
+           failed: { source: string; message: string }[] } | null;
 };
 export type MacroRow = {
   key: string; label: string; unit: string; origin: "AUTO" | "MANUAL"; value: string | null; display: string;

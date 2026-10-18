@@ -85,7 +85,7 @@ export default function NewsPage() {
           )}
 
           <Section title={`Items (${data.items.length})`} aside={data.basis}>
-            {!data.items.length ? <p className="text-sm text-muted-foreground">No items for these filters yet. Refresh to fetch; history builds from the first fetch.</p> : (
+            {!data.items.length ? <EmptyNews e={data.empty} /> : (
               <ul className="flex flex-col">
                 {data.items.map((n) => (
                   <li key={n.id} className="border-b border-border py-2.5 last:border-0">
@@ -124,7 +124,7 @@ export default function NewsPage() {
                 {data.sources.map((s) => (
                   <li key={s.source} className="flex justify-between gap-2">
                     <span>{s.source}</span>
-                    <span className={s.ok ? "text-muted-foreground" : "text-status-high"}>{s.ok ? s.message : `▲ ${s.message}`}</span>
+                    <span className={s.ok ? "text-muted-foreground" : "text-status-high"}>{s.ok ? (s.items_fetched !== null ? `${s.items_fetched} fetched · ${s.items_matched ?? 0} matched` : s.message) : `▲ ${s.message}`}</span>
                   </li>
                 ))}
                 {(() => {
@@ -141,5 +141,22 @@ export default function NewsPage() {
         </div>
       )}
     </>
+  );
+}
+
+function EmptyNews({ e }: { e: NewsFeed["empty"] }) {
+  if (!e) return null;
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <p className={e.kind === "SOURCES_FAILED" ? "text-status-high" : "text-muted-foreground"}>
+        {e.message}
+        {e.kind === "NO_TRACKED_HOLDINGS" && <> <Link className="underline" href="/mappings">Open Mappings</Link></>}
+      </p>
+      {e.failed.length > 0 && (
+        <ul className="text-xs text-muted-foreground">
+          {e.failed.map((f) => <li key={f.source}><span className="text-foreground">{f.source}:</span> {f.message}</li>)}
+        </ul>
+      )}
+    </div>
   );
 }

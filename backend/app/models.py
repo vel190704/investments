@@ -342,6 +342,8 @@ class NewsSourceStatus(Base):
     ok: Mapped[bool] = mapped_column(Boolean)
     message: Mapped[str] = mapped_column(Text)
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    items_fetched: Mapped[int | None] = mapped_column(Integer)  # last refresh; None when the source failed
+    items_matched: Mapped[int | None] = mapped_column(Integer)
 
 
 class MacroValue(Base):
