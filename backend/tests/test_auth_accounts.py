@@ -238,3 +238,24 @@ def test_template_has_headers_and_no_data_rows(tmp_path):
     with db.session_scope(user_id=make_user()) as s:
         rep = import_workbook(s, p)
     assert rep["transactions"]["loaded"] == 0  # the blank template imports cleanly with nothing in it
+
+
+def test_changed_encryption_key_blocks_own_key_use_without_falling_back(session, monkeypatch):
+    """If FIELD_ENCRYPTION_KEY changes, stored own keys cannot be read: AI is blocked with a clear message (the
+    person re-enters their key); it never silently switches to the app's shared key."""
+    from cryptography.fernet import Fernet
+
+    from app.crypto import encrypt
+    from app.models import User
+    from app.services import analysis as an
+    from app.services import settings as st
+
+    st_ = get_settings()
+    monkeypatch.setattr(st_, "anthropic_api_key", "sk-platform-key-not-to-be-used")
+    monkeypatch.setattr(st_, "field_encryption_key", Fernet.generate_key().decode())
+    st.put(session, "llm", {**st.get(session, "llm"), "outbound_enabled": True})
+    session.get(User, session.info["user_id"]).own_key_encrypted = encrypt("sk-ant-api03-" + "Y" * 40)
+    session.flush()
+    assert an.gate(session) is None and an._api_key(session) == ("sk-ant-api03-" + "Y" * 40, True)
+    monkeypatch.setattr(st_, "field_encryption_key", Fernet.generate_key().decode())  # the secret changed
+    assert "cannot be decrypted" in an.gate(session)
