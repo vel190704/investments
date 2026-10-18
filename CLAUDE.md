@@ -16,6 +16,7 @@ in-app transaction form) is the only input for holdings and transactions.** See 
 - `make backup` / `make migrate` — SQLite backup to data/backups/ / apply Alembic migrations
 - `make fundamentals` — fetch fundamentals (yfinance) now
 - `make lint` — eslint + tsc; `make test` also runs the frontend formatter tests
+- `make logs` / `make logs-errors` — follow `logs/app.log` (all / WARNING and above)
 - Backend only: `cd backend && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload`
 - Frontend only: `cd frontend && npm run dev`
 - CLI import: `cd backend && .venv/bin/python -m app.import_excel ../data/<file>.xlsx` (`--dry-run` to preview)
@@ -130,6 +131,33 @@ in-app transaction form) is the only input for holdings and transactions.** See 
   interpolate or back-fill snapshots.
 - Parser regression tests use trimmed real responses in `backend/tests/fixtures/` (no personal
   data). Re-record them when a source format changes.
+
+## Logging (app/logging_config.py)
+- Use `logging.getLogger("app.<area>")` and `event(log, "name", **fields)` for structured lines; never print().
+- Never log secrets, Authorization/x-api-key headers, thesis/qualitative text, LLM prompts or inputs, or
+  submitted form values. Log ids, hashes, counts, durations, status and error classes. The redaction filter is a
+  backstop, not a licence. `tests/test_logging.py` must stay green.
+- Outbound calls go through `app/net/outbound.outbound(...)` (source, host only, status, duration, retries).
+- Scheduled work runs through `scheduler.run_job` (start/end/duration/outcome; never raises).
+- API errors return `{"detail", "request_id"}`; the UI shows status, message and the request id.
+- Smoke tests against a copy of the real DB run with `ANTHROPIC_API_KEY=` (empty): the user's DB may have the AI
+  toggle on, and a live call costs money.
+
+## Routes and datetimes
+- Type id path params (`{iid:int}`) and register static paths before dynamic ones; `tests/test_routes.py` fails on
+  any static path shadowed by an earlier dynamic route.
+- Datetime columns use `UTCDateTime` (app/types.py): SQLite stores no zone, so every value is converted to UTC.
+- Lazy seeding uses `repository.insert_ignore` (INSERT ... ON CONFLICT DO NOTHING), never check-then-insert, and
+  never on a GET.
+
+## Live intraday prices
+- Market hours: `app/calc/market_hours.py` (09:15 inclusive – 15:30 exclusive IST, Mon–Fri, minus the user's
+  holiday table in Settings › market_holidays, which ships empty; never scrape the NSE list).
+- Poll only stocks/ETFs, only when Settings › live is enabled, the market is open and a viewer was seen recently;
+  one batched request per cycle; backoff on failures; manual refresh is the only write outside market hours.
+- Real quotes only; never simulate or interpolate. Stale = older than 2 poll intervals; totals use fresh quotes
+  only and list what was left out. `intraday_ticks` (14-day retention) never feeds price_quotes, snapshots, XIRR or
+  history.
 
 ## Settings
 - User choices have no invented defaults: targets and the emergency fund start unset ("Set your

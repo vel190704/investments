@@ -3,8 +3,9 @@
 Single-user, local-first portfolio analytics and planning tool for an Indian retail investor.
 It **never places orders**. Excel workbook = source of truth for transactions.
 
-Status: Phases 0–5 done (§10 = Phase 2, §11 = Phase 3, §12 = Phase 4, §13 = Phase 5: Excel-only
-workflow, hygiene, valuation framework, peers, qualitative notes, fund/portfolio AI cards, reliability).
+Status: Phases 0–6 done (§10 = Phase 2, §11 = Phase 3, §12 = Phase 4, §13 = Phase 5: Excel-only
+workflow, hygiene, valuation framework, peers, qualitative notes, fund/portfolio AI cards, reliability;
+§14 = Phase 6: bug fixes, logging, live intraday prices).
 
 ---
 
@@ -959,3 +960,61 @@ manual override needs a source note and an as-of date.
    above 100 are N/A (implausible).
 9. ROE is Yahoo's `returnOnEquity`; when Yahoo omits it, it stays N/A (not recomputed from
    statements). Own history shows per-year ROE from statements separately.
+
+
+---
+
+## 14. Phase 6 design: bug fixes, logging, live intraday prices
+
+### 14.1 Bug fixes (each has a test that failed before the fix)
+1. `POST /api/analysis/portfolio` → 422: `/analysis/{iid}` (registered first) captured "portfolio". All id path
+   params are now `{name:int}`, static analysis routes come first, and `tests/test_routes.py` walks the route
+   table (including FastAPI ≥0.140's nested included routers) and fails on any static path shadowed by an earlier
+   dynamic one.
+2. `GET /api/macro` 500 (UNIQUE `sector_sensitivities.sector`): two requests seeded starter tags at once.
+   Seeding is now `INSERT … ON CONFLICT DO NOTHING` (`repository.insert_ignore`), runs at start-up and after
+   classification changes, and never on a GET. It was the only lazy seed on a read path; the other
+   get-or-create sites run in user actions or refresh jobs.
+3. NSE feeds ReadTimeout: per-host timeout (25 s default, configurable), one retry after 5 s on timeouts,
+   connection errors and 502/503/504; 401/403/429 never retried; robots.txt, spacing and the 10-min skip
+   unchanged.
+4. Empty News page explains why (`calc/news.empty_explanation`); per-source fetched/matched counts
+   (migration 0006).
+5. Settings › AI › Test connection (fixed ping, ≤16 tokens, real provider error text, answering model, fallback
+   state).
+6. Found while building: `data_gaps` items had to cite an id even when the gap is about absent data, so a
+   portfolio card could never pass; they may now be uncited (still checked for numbers, wording, unknown ids).
+7. Found while building: SQLite stored IST-aware datetimes unconverted (NSE announcement times 5 h 30 min late; the
+   journal "since" boundary and the AI monthly window off by the same). All datetime columns now use
+   `UTCDateTime`.
+
+### 14.2 Logging
+`app/logging_config.py` (console + `logs/app.log`, 10 MB × 5, kv or JSON, `LOG_LEVEL`, redaction on the formatted
+line), `app/api/middleware.py` (request id contextvar, `X-Request-ID`, per-request line, 4xx detail without
+values, 5xx traceback), `app/net/outbound.py`, LLM and job lines, `make logs` / `make logs-errors`. The UI shows
+status, message and request id (copy button) for every API error.
+
+### 14.3 Live intraday prices
+`calc/market_hours.py`, `calc/intraday.py` (stale rule, totals from fresh quotes, last-traded-price series),
+`market/intraday.py` (one batched `yf.download` of 1-minute bars), `services/live.py` (poll cycle, scheduler tick
+every 15 s, viewer-idle skip, backoff, rate-limited manual refresh, view), table `intraday_ticks` (migration 0007,
+14-day retention), settings `live` and `market_holidays`, UI on Dashboard, Stocks & ETFs and Settings.
+
+### 14.4 Assumptions
+1. Session = 09:15:00 inclusive to 15:30:00 exclusive IST. Pre-open, closing session and special sessions
+   (Muhurat) are not modelled.
+2. The holiday table ships **empty**: dates are not invented or scraped. Until the user enters them, every weekday
+   counts as a trading day (the dashboard warns). On an unentered holiday the poller would request quotes and
+   find only old bars, which then show as stale.
+3. Live is **off by default**: it makes a request every interval, so it is the user's choice. Polling also stops
+   when no page has asked for live data for max(5 min, 3 intervals), so a closed browser stops outbound requests.
+4. "One batched request" = one `yf.download` call for all tickers; yfinance may make several HTTP calls under the
+   hood. Quote timestamp = the 1-minute bar's start time; Yahoo data may be delayed.
+5. Previous close = the latest end-of-day quote dated before today's session. The last 1-minute bar can differ
+   from the official close (e.g. MOSCHIP 187.49 vs 187.06 on 2026-10-16), so "last close" always comes from
+   end-of-day data.
+6. Portfolio intraday series values each holding at its last traded price at or before each minute (that is
+   what a quote is); minutes before any included holding's first trade are omitted, never filled.
+7. Backoff doubles the interval per consecutive failed cycle, capped at 10 minutes; one success resets it.
+8. Test connection is allowed while the privacy toggle is off, because it sends a fixed line with no data about
+   the user; it is logged and counts toward the monthly cap.

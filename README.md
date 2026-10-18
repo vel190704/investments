@@ -115,6 +115,7 @@ checkboxes:
 | History | growth chart (value vs invested), snapshot list, "Take snapshot" |
 | Changes | change log (transactions, quantity/avg-cost, allocation) and compare snapshot A vs B or today |
 | Stocks & ETFs / Mutual funds | holdings tables with source, as-of date and XIRR |
+| Dashboard / Stocks & ETFs (live) | Live toggle, market status, live value and day P&L from fresh quotes, sparklines, intraday chart |
 | Monthly update | this month's checklist (SIP rows, buys, import, prices, snapshot) with missing-SIP warnings |
 | Transactions | all rows with their source; add BUY/SIP/SELL/DIVIDEND; delete in-app rows; export to Excel |
 | Allocation | asset classes, drift vs targets (tolerance band), XIRR by class, concentration, "not held" info |
@@ -280,7 +281,10 @@ All fetching goes through one polite client:
 - a clear User-Agent;
 - `robots.txt` checked first; a 403 on `robots.txt` counts as "not permitted";
 - at least 2 s between requests to the same host, and responses cached for 30 min;
-- a host that fails is skipped for 10 min.
+- a 25 s read timeout per request (`SOURCE_TIMEOUT_SECONDS`; per host: `SOURCE_TIMEOUTS='{"nsearchives.nseindia.com": 40}'`
+  in `.env`);
+- timeouts, connection errors and 502/503/504 are retried **once** after 5 s; 401/403/429 never are;
+- a host that still fails is skipped for 10 min.
 
 A blocked source shows **"Source unavailable"** and is never worked around.
 
@@ -295,6 +299,11 @@ A blocked source shows **"Source unavailable"** and is never worked around.
 Only holdings with a **confirmed ISIN** (Mappings) are tracked. For funds, news covers their
 top 5 holdings by your look-through exposure, never generic fund news. Items older than 90
 days are deleted.
+
+When the page shows no items it says why: not fetched yet, every source failed (with each
+reason), items were fetched but no holdings are tracked yet (confirm ISINs on Mappings), or
+nothing mentioned your tracked companies. The Sources box shows how many items each source
+returned and how many matched.
 
 ## Valuation framework, rubric and peers
 
@@ -395,6 +404,66 @@ Every answer is validated before display. It is rejected if it:
 A rejected answer is retried once with the reasons; if it fails again it is flagged and not
 shown.
 
+## Live intraday prices
+
+**Settings › Live prices** turns it on (off by default) and sets the poll interval (60 s by
+default, 30–300 s). While it is on:
+- the backend polls quotes for your **direct stocks and ETFs** during market hours only:
+  09:15–15:30 IST, Monday–Friday, excluding the holidays in **Settings › Market holidays**;
+- it polls only while a page showing live prices (Dashboard, Stocks & ETFs) is open, and the
+  page refreshes only while its browser tab is visible;
+- each cycle is one batched yfinance request for 1-minute bars; failed cycles back off (2×, 4×,
+  … up to 10 min). "Refresh quotes now" works any time, at most once per 30 s.
+
+**Mutual funds are not polled**: an AMFI NAV is published once a day.
+
+What you see:
+- Live value and day P&L vs the previous close, from **fresh quotes only**. A quote older than
+  two poll intervals is marked *delayed/stale* and left out, as is any instrument whose quote
+  failed; a warning lists them.
+- Per stock: live price, quote time, day change, and a sparkline of today's real 1-minute bars.
+- A portfolio intraday chart. Each point values the included holdings at their last traded price
+  at or before that minute; minutes before a holding's first trade of the day are omitted.
+- Outside market hours: "Market closed", the reason and the next open; the table shows the last
+  close.
+
+Quotes are real (Yahoo Finance via yfinance, may be delayed): nothing is simulated or
+interpolated. Ticks are kept 14 days in `intraday_ticks` and **never** feed snapshots, XIRR or
+history; those stay end-of-day.
+
+**Market holidays.** The table starts empty: enter each NSE trading holiday by hand (date and
+name) and verify it against the NSE holiday list (nseindia.com › Resources › Exchange
+Communication › Holidays). Nothing is scraped. A weekday that isn't in the table is treated as a
+trading day, and the dashboard warns while the table is empty.
+
+## Logs and debugging
+
+The backend logs to the console and to `logs/app.log` (rotated at 10 MB, 5 files kept;
+`logs/` is git-ignored).
+- One line per event, as `key=value` pairs (or JSON with `LOG_FORMAT=json`); level from
+  `LOG_LEVEL` (default `INFO`).
+- Every line carries `rid=`, the request id. The response sends it back as `X-Request-ID`, and
+  error messages in the UI show it with a copy button, so you can find the matching lines.
+- Logged: every request (method, path, status, duration); 4xx details (validation errors list
+  the field and message, never the submitted value); 5xx full tracebacks; every outbound call
+  (source, host, status, duration, retries, error class); every LLM call (model, input hash,
+  tokens, latency, outcome, validator rejection reasons); every scheduled job (start, end,
+  duration, outcome); every live poll cycle; the start-up catch-up.
+- **Never logged:** API keys, Authorization or x-api-key headers, key or token URL
+  parameters (a redaction filter removes them from every line, tracebacks included), journal or
+  qualitative text, and LLM prompts or inputs.
+
+```bash
+make logs          # follow logs/app.log
+make logs-errors   # follow WARNING and above (plus tracebacks)
+```
+
+**AI connection test.** *Settings › AI analysis › Test connection* sends one fixed line (no
+portfolio data, at most 16 output tokens) to check the key and the model id you typed. It shows
+the model that answered, the latency and the provider's exact error text, and says whether
+refusal fallback is on. It works while outbound calls are off, because it carries nothing about
+you; it is logged and counts toward the monthly cap.
+
 ## Reliability: source health, start-up catch-up, running as a service
 
 **Source health** records every fetch (Yahoo prices, fundamentals, peers and macro; AMFI;
@@ -442,6 +511,8 @@ Then run `systemctl --user daemon-reload && systemctl --user enable --now invest
 | Fundamentals | Yahoo Finance via yfinance | only plausible values; otherwise N/A with the reason |
 | Annual statements (FCF, coverage, own history) | Yahoo Finance via yfinance (`income_stmt`, `cashflow`, `balance_sheet`) | usually four fiscal years |
 | Peer metrics | Yahoo Finance via yfinance, for the symbols you chose | rate-limited, cached 24 h |
+| Intraday quotes (live) | Yahoo Finance via yfinance, 1-minute bars, one batched request per poll | market hours only; may be delayed; kept 14 days |
+| Market holidays | **manual** (Settings), verified against the NSE holiday list | nothing scraped |
 | ROCE, promoter holding, alpha, expense ratio, exit load, tracking error/difference | **manual** (source note + as-of date required) | no reliable free source; nothing is scraped |
 | Fund holdings | your uploads of AMC disclosures / index weights | |
 | USD/INR, Brent, Nifty 50 | Yahoo Finance via yfinance (`INR=X`, `BZ=F`, `^NSEI`) | N/A on failure; never filled from memory |
