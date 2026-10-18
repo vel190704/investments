@@ -746,6 +746,17 @@ def put_sensitivity(sector: str, body: TagsIn, session: Session = Depends(get_se
     return {"ok": True}
 
 
+class LlmTestIn(BaseModel):
+    model: str | None = None
+
+
+@router.post("/llm/test")
+def llm_test(body: LlmTestIn | None = None, session: Session = Depends(get_session)):
+    from app.services.analysis import test_connection
+
+    return test_connection(session, model=body.model if body else None)
+
+
 @router.get("/analysis")
 def analysis_cards(session: Session = Depends(get_session)):
     from app.services.analysis import cards

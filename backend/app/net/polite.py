@@ -55,10 +55,10 @@ class PoliteClient:
         self._min_interval, self._sleep, self._clock = min_interval, sleep, clock
 
     @classmethod
-    def from_settings(cls, **kw) -> PoliteClient:
+    def from_settings(cls, settings=None, **kw) -> PoliteClient:
         from app.config import get_settings
 
-        st = get_settings()
+        st = settings or get_settings()
         return cls(timeout=st.source_timeout_seconds, host_timeouts=st.source_timeouts, **kw)
 
     def _get(self, url: str, host: str) -> httpx.Response:

@@ -61,6 +61,39 @@ def default_provider(s: Session) -> LLMProvider:
     return AnthropicProvider(model=st.llm_model(s), effort=cfg["effort"], refusal_fallback=cfg.get("refusal_fallback", False))
 
 
+def test_connection(s: Session, model: str | None = None, api_key: str | None = None) -> dict:
+    """Settings › Test connection. Sends a fixed ping (no portfolio data) even when the privacy toggle is off,
+    because it carries nothing about you; it is logged like any call. Validates the model id for real."""
+    import time
+
+    from app.llm.provider import PING_PROMPT, AnthropicProvider, LLMUnavailable
+
+    cfg = st.get(s, "llm")
+    requested = (model or "").strip() or st.llm_model(s)
+    fallback = bool(cfg.get("refusal_fallback", False))
+    out = {"ok": False, "requested_model": requested, "model": None, "fallback_used": False,
+           "refusal_fallback": fallback, "sent": PING_PROMPT, "input_tokens": 0, "output_tokens": 0,
+           "latency_ms": None, "error": None, "reply": None}
+    try:
+        provider = AnthropicProvider(model=requested, effort=cfg["effort"], api_key=api_key, refusal_fallback=fallback)
+    except LLMUnavailable as e:
+        out["error"] = str(e)
+        return out
+    t0 = time.monotonic()
+    try:
+        p = provider.ping()
+    except LLMUnavailable as e:
+        out["latency_ms"] = round((time.monotonic() - t0) * 1000)
+        out["error"] = str(e)
+        _log(s, "connection test", requested, False, error=str(e))
+        return out
+    out.update(ok=True, model=p.model, fallback_used=p.model != requested, input_tokens=p.input_tokens,
+               output_tokens=p.output_tokens, latency_ms=round((time.monotonic() - t0) * 1000), reply=p.text[:40],
+               stop_reason=p.stop_reason)
+    _log(s, "connection test", p.model, True, p.input_tokens, p.output_tokens)
+    return out
+
+
 def _log(s: Session, purpose: str, model: str, ok: bool, tin: int = 0, tout: int = 0, error: str | None = None) -> None:
     from app.services.source_health import record
 

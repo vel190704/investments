@@ -97,13 +97,9 @@ def test_server_errors_503_are_retried_once():
 
 
 def test_timeouts_come_from_settings(monkeypatch):
-    from app.config import get_settings
+    from app.config import Settings
 
     monkeypatch.setenv("SOURCE_TIMEOUT_SECONDS", "12")
     monkeypatch.setenv("SOURCE_TIMEOUTS", '{"nsearchives.nseindia.com": 45}')
-    get_settings.cache_clear()
-    try:
-        c = polite.PoliteClient.from_settings()
-        assert c._default_timeout == 12.0 and c._host_timeouts == {"nsearchives.nseindia.com": 45.0}
-    finally:
-        get_settings.cache_clear()
+    c = polite.PoliteClient.from_settings(settings=Settings(_env_file=None))  # never reads the real .env
+    assert c._default_timeout == 12.0 and c._host_timeouts == {"nsearchives.nseindia.com": 45.0}

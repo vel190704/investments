@@ -5,7 +5,7 @@ import { ErrorBox, Loading, Notice, PageHeader, Section } from "@/components/com
 import { Field, Select, numeric, rupeesToPaise } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { apiDelete, apiPut, errorText, useApi, type LlmUsage, type Lookthrough, type SectorsPage, type Settings } from "@/lib/api";
+import { apiDelete, apiPost, apiPut, errorText, useApi, type LlmUsage, type Lookthrough, type SectorsPage, type Settings } from "@/lib/api";
 import { formatINR } from "@/lib/format";
 
 const CONC_LABELS: Record<string, { label: string; unit: "fraction" | "hhi" }> = {
@@ -373,6 +373,62 @@ function Themes({ s, onSaved }: { s: Settings; onSaved: () => void }) {
   );
 }
 
+type LlmTest = {
+  ok: boolean; requested_model: string; model: string | null; fallback_used: boolean; refusal_fallback: boolean;
+  sent: string; input_tokens: number; output_tokens: number; latency_ms: number | null; error: string | null; reply: string | null;
+};
+
+function ConnectionTest({ model, savedFallback }: { model: string; savedFallback: boolean }) {
+  const [res, setRes] = useState<LlmTest | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function run() {
+    setBusy(true);
+    setErr(null);
+    try {
+      setRes(await apiPost<LlmTest>("/llm/test", { model: model.trim() || null }));
+    } catch (e) {
+      setErr(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="mt-3 rounded-md border border-border p-3 text-sm">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="outline" disabled={busy} onClick={run}>{busy ? "Testing…" : "Test connection"}</Button>
+        <span className="text-xs text-muted-foreground">
+          Sends one fixed line (no portfolio data, at most 16 output tokens) to check the key and the model id above, even
+          while outbound calls are off. It is logged and counts as a call.
+        </span>
+      </div>
+      <p className="mt-2 text-xs">
+        Refusal fallback (saved setting): <b className={savedFallback ? "text-status-moderate" : ""}>{savedFallback ? "ON" : "OFF"}</b>
+        {savedFallback ? " — a different model may answer; it will be named." : " — only the requested model answers."}
+      </p>
+      {err && <ErrorBox message={err} />}
+      {res && (
+        <div className={`mt-2 rounded border px-2 py-1.5 text-xs ${res.ok ? "border-status-low/50" : "border-status-high/50"}`}>
+          {res.ok ? (
+            <>
+              <b className="text-status-low">Connected.</b> Requested <code>{res.requested_model}</code>, answered by <code>{res.model}</code>
+              {res.fallback_used && <b className="text-status-moderate"> (fallback model)</b>} · {res.latency_ms} ms ·
+              {" "}{res.input_tokens} in / {res.output_tokens} out tokens · reply “{res.reply}”
+            </>
+          ) : (
+            <>
+              <b className="text-status-high">Failed.</b> Requested <code>{res.requested_model}</code>
+              {res.latency_ms !== null && <> · {res.latency_ms} ms</>}
+              <div className="mt-1 font-mono break-words">{res.error}</div>
+            </>
+          )}
+          <div className="mt-1 text-muted-foreground">Sent: “{res.sent}”</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AiSettings({ s, onSaved }: { s: Settings; onSaved: () => void }) {
   const v = s.sections.llm.value;
   const [form, setForm] = useState({
@@ -423,6 +479,7 @@ function AiSettings({ s, onSaved }: { s: Settings; onSaved: () => void }) {
         <Button disabled={busy} onClick={() => submit()}>Save AI settings</Button>
         {feedback}
       </div>
+      <ConnectionTest model={form.model} savedFallback={v.refusal_fallback} />
       {status.data && (
         <p className="mt-2 text-xs text-muted-foreground">
           {status.data.gate ? `Status: ${status.data.gate}` : "Status: ready."} This month: {status.data.usage.calls_this_month}/{status.data.usage.cap} calls,

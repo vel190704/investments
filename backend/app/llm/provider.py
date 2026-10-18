@@ -11,6 +11,33 @@ class LLMUnavailable(Exception):
     """The LLM feature can't run (no key, privacy toggle off, cap reached, provider error)."""
 
 
+# Fixed text for Settings › Test connection: no portfolio data, no system prompt.
+PING_PROMPT = "Connection test. Reply with the single word: ok"
+PING_MAX_TOKENS = 16
+
+
+def provider_error_text(e: Exception) -> str:
+    """The provider's own error type and message (never headers or the key)."""
+    import anthropic as a
+
+    if isinstance(e, a.APIStatusError):
+        err = (e.body or {}).get("error", {}) if isinstance(e.body, dict) else {}
+        etype, msg = err.get("type"), err.get("message")
+        return f"Anthropic API error {e.status_code}" + (f" ({etype})" if etype else "") + (f": {msg}" if msg else "")
+    if isinstance(e, a.APIConnectionError):
+        return f"Could not reach the Anthropic API ({type(e).__name__}: {e})"
+    return f"{type(e).__name__}: {e}"
+
+
+@dataclass(frozen=True)
+class Ping:
+    model: str
+    stop_reason: str | None
+    text: str
+    input_tokens: int
+    output_tokens: int
+
+
 @dataclass(frozen=True)
 class Completion:
     text: str
@@ -44,24 +71,27 @@ class AnthropicProvider:
         self._anthropic = anthropic
         self._client = anthropic.Anthropic(api_key=key, timeout=120.0, max_retries=2)
 
-    def complete_json(self, system: str, messages: list[dict], schema: dict, max_tokens: int = 16000) -> Completion:
+    def _create(self, **params):
         a = self._anthropic
-        params = dict(model=self.model, max_tokens=max_tokens, system=system, messages=messages,
-                      output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}})
         try:
             if self.refusal_fallback:  # opt-in (Settings); default off
-                resp = self._client.beta.messages.create(**params, betas=["server-side-fallback-2026-07-01"],
+                return self._client.beta.messages.create(**params, betas=["server-side-fallback-2026-07-01"],
                                                          fallbacks="default")
-            else:
-                resp = self._client.messages.create(**params)
-        except a.AuthenticationError:
-            raise LLMUnavailable("The Anthropic API key was rejected.") from None
-        except a.RateLimitError:
-            raise LLMUnavailable("Rate limited by the Anthropic API; try again later.") from None
-        except a.APIStatusError as e:
-            raise LLMUnavailable(f"Anthropic API error {e.status_code}.") from None
-        except a.APIConnectionError:
-            raise LLMUnavailable("Could not reach the Anthropic API (network).") from None
+            return self._client.messages.create(**params)
+        except (a.APIStatusError, a.APIConnectionError) as e:
+            raise LLMUnavailable(provider_error_text(e)) from None
+
+    def ping(self) -> Ping:
+        """Minimal request (Settings › Test connection): fixed prompt, tiny max_tokens, no personal data."""
+        resp = self._create(model=self.model, max_tokens=PING_MAX_TOKENS,
+                            messages=[{"role": "user", "content": PING_PROMPT}])
+        text = next((b.text for b in resp.content if b.type == "text"), "")
+        return Ping(resp.model, resp.stop_reason, text, resp.usage.input_tokens, resp.usage.output_tokens)
+
+    def complete_json(self, system: str, messages: list[dict], schema: dict, max_tokens: int = 16000) -> Completion:
+        params = dict(model=self.model, max_tokens=max_tokens, system=system, messages=messages,
+                      output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}})
+        resp = self._create(**params)
         if resp.stop_reason == "refusal":
             raise LLMUnavailable("The model declined this request.")
         if resp.stop_reason == "max_tokens":
