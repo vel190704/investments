@@ -152,3 +152,23 @@ def test_fund_and_portfolio_cards_run_cached_and_flag(session, workbook, monkeyp
     assert r["status"] == "OK" and r["kind"] == "portfolio" and r["analysis"]["summary"]
     cards = an.cards(session)
     assert cards["portfolio"]["card"]["status"] == "OK" and any(f["card"] for f in cards["funds"])
+
+
+def test_data_gaps_may_be_uncited_but_are_still_checked():
+    """Found by a real call on 2026-10-18: a gap about something absent from the input has no id to cite,
+    so requiring a citation made the portfolio card fail every time."""
+    from app.llm.validate import validate
+
+    inp = {"health": [{"id": "hd:company", "value": "12.5%"}]}
+    ok = {"summary": [{"text": "Largest company exposure is 12.5%.", "citations": ["hd:company"]}],
+          "data_gaps": [{"text": "No fund disclosures were uploaded.", "citations": []}]}
+    data, errs = validate(json.dumps(ok), inp, "portfolio")
+    assert errs == [] and data is not None
+    bad_cite = {**ok, "data_gaps": [{"text": "Gap.", "citations": ["zz:nope"]}]}
+    assert any("cites ids not in the input" in e for e in validate(json.dumps(bad_cite), inp, "portfolio")[1])
+    invented = {**ok, "data_gaps": [{"text": "Missing 42 values.", "citations": []}]}
+    assert any(e.startswith("(a)") for e in validate(json.dumps(invented), inp, "portfolio")[1])
+    banned = {**ok, "data_gaps": [{"text": "You should buy more data.", "citations": []}]}
+    assert any(e.startswith("(b)") for e in validate(json.dumps(banned), inp, "portfolio")[1])
+    uncited_summary = {**ok, "summary": [{"text": "Concentrated.", "citations": []}]}
+    assert "(c) summary[0] has no citation" in validate(json.dumps(uncited_summary), inp, "portfolio")[1]

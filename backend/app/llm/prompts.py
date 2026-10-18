@@ -1,6 +1,6 @@
 """System prompt and output schema for per-holding scenario analysis. Bump PROMPT_VERSION on any change."""
 
-PROMPT_VERSION = "2026-10-17.2"
+PROMPT_VERSION = "2026-10-18.1"
 SCENARIOS = ["rate_cut", "rate_rise", "weaker_rupee", "higher_crude", "sector_regulation", "demand_slowdown"]
 DIRECTIONS = ["upward pressure", "downward pressure", "mixed", "unclear"]
 SCENARIO_LABELS = {"rate_cut": "a rate cut", "rate_rise": "a rate rise", "weaker_rupee": "a weaker rupee",
@@ -95,7 +95,7 @@ PORTFOLIO_SCHEMA = {
     "required": PORTFOLIO_SECTIONS,
     "additionalProperties": False,
 }
-PORTFOLIO_SYSTEM_PROMPT = """Summarise, factually, what the portfolio flags in the JSON input show: concentration (including look-through through funds), allocation drift, sector exposure and the health dimensions. Use only the input; cite input ids for every statement; copy numbers exactly or use none. Do not give advice, do not recommend any action, do not predict anything, and do not rank or score the portfolio. List missing inputs in data_gaps."""
+PORTFOLIO_SYSTEM_PROMPT = """Summarise, factually, what the portfolio flags in the JSON input show: concentration (including look-through through funds), allocation drift, sector exposure and the health dimensions. Use only the input; cite input ids for every statement; copy numbers exactly or use none. Do not give advice, do not recommend any action, do not predict anything, and do not rank or score the portfolio. List missing inputs in data_gaps (cite an input id when the gap refers to one; otherwise leave citations empty)."""
 
 KINDS = {
     "stock": {"system": SYSTEM_PROMPT, "schema": OUTPUT_SCHEMA, "sections": STATEMENT_SECTIONS, "scenarios": True},

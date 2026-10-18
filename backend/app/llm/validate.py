@@ -147,7 +147,8 @@ def validate(output_text: str, input_obj: dict, kind: str = "stock") -> tuple[di
     if spec["scenarios"]:
         statements += [(f"scenarios[{i}]", it["because"], it["citations"]) for i, it in enumerate(data["scenarios"])]
     for where, text, cites in statements:
-        if not cites:
+        # a data gap is about something absent from the input, so it may have nothing to cite
+        if not cites and not where.startswith("data_gaps["):
             errors.append(f"(c) {where} has no citation")
         unknown = [c for c in cites if c not in ids]
         if unknown:
