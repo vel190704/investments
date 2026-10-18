@@ -140,7 +140,7 @@ def test_network_failure_degrades_to_source_unavailable(session, workbook):
     import_workbook(session, workbook)
     def boom(req):
         raise httpx.ConnectError("offline")
-    c = PoliteClient(transport=httpx.MockTransport(boom), min_interval=0)
+    c = PoliteClient(transport=httpx.MockTransport(boom), min_interval=0, sleep=lambda _s: None)
     session.scalar(select(Instrument).where(Instrument.symbol == "LT")).isin = "INE018A01030"
     rep = ns.refresh_news(session, c, now=NOW)  # must not raise
     assert rep["added"] == 0 and rep["sources"]["NSE"]["errors"]
@@ -153,15 +153,15 @@ def test_failed_host_is_skipped_for_a_while():
         calls.append(str(req.url))
         raise httpx.ReadTimeout("slow")
     t = [0.0]
-    c = PoliteClient(transport=httpx.MockTransport(slow), min_interval=0, clock=lambda: t[0])
+    c = PoliteClient(transport=httpx.MockTransport(slow), min_interval=0, clock=lambda: t[0], sleep=lambda _s: None)
     for path in ("a.xml", "b.xml", "c.xml"):
         with pytest.raises(SourceUnavailable):
             c.get_text(f"https://slow.example/{path}")
-    assert len(calls) == 1  # robots.txt timed out once; the other feeds on that host were skipped
+    assert len(calls) == 2  # robots.txt timed out twice (one retry); the other feeds on that host were skipped
     t[0] = 11 * 60
     with pytest.raises(SourceUnavailable):
         c.get_text("https://slow.example/d.xml")
-    assert len(calls) == 2  # retried after the cool-down
+    assert len(calls) == 4  # tried again (with its one retry) after the cool-down
 
 
 def test_robots_403_means_not_permitted():

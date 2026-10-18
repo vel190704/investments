@@ -4,7 +4,9 @@
 - robots.txt checked for every URL (cached 24 h); disallowed URLs are never fetched;
 - at least MIN_INTERVAL seconds between requests to the same host;
 - responses cached for CACHE_SECONDS;
-- 401/403/429 and network errors become SourceUnavailable (no retries, no evasion).
+- per-host read timeout (default 25 s; SOURCE_TIMEOUT_SECONDS / SOURCE_TIMEOUTS in .env);
+- timeouts, connection errors and 502/503/504 are retried ONCE after RETRY_BACKOFF seconds;
+- 401/403/429 are never retried (that would be evading a block); they become SourceUnavailable.
 """
 
 from __future__ import annotations
@@ -22,6 +24,9 @@ MIN_INTERVAL = 2.0
 CACHE_SECONDS = 30 * 60
 ROBOTS_SECONDS = 24 * 3600
 DOWN_SECONDS = 10 * 60  # after a network failure, skip that host for this long (no hammering a slow server)
+DEFAULT_TIMEOUT = 25.0
+RETRY_BACKOFF = 5.0
+RETRY_STATUSES = {502, 503, 504}
 
 
 class SourceUnavailable(Exception):
@@ -35,16 +40,46 @@ class _Cached:
 
 
 class PoliteClient:
-    def __init__(self, transport: httpx.BaseTransport | None = None, timeout: float = 20.0,
-                 min_interval: float = MIN_INTERVAL, sleep=time.sleep, clock=time.monotonic):
+    def __init__(self, transport: httpx.BaseTransport | None = None, timeout: float = DEFAULT_TIMEOUT,
+                 min_interval: float = MIN_INTERVAL, sleep=time.sleep, clock=time.monotonic,
+                 host_timeouts: dict[str, float] | None = None):
         self._client = httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=timeout, follow_redirects=True,
                                     transport=transport)
+        self._default_timeout = float(timeout)
+        self._host_timeouts = {h: float(t) for h, t in (host_timeouts or {}).items()}
         self._robots: dict[str, _Cached] = {}
         self._cache: dict[str, _Cached] = {}
         self._last: dict[str, float] = {}
         self._down: dict[str, tuple[float, str]] = {}
         self._lock = threading.Lock()
         self._min_interval, self._sleep, self._clock = min_interval, sleep, clock
+
+    @classmethod
+    def from_settings(cls, **kw) -> PoliteClient:
+        from app.config import get_settings
+
+        st = get_settings()
+        return cls(timeout=st.source_timeout_seconds, host_timeouts=st.source_timeouts, **kw)
+
+    def _get(self, url: str, host: str) -> httpx.Response:
+        """One polite GET with a single retry (after RETRY_BACKOFF) on timeouts, connection errors and 502/503/504.
+        Raises SourceUnavailable and marks the host down when both attempts fail."""
+        timeout = self._host_timeouts.get(host, self._default_timeout)
+        last = ""
+        for attempt in (1, 2):
+            if attempt == 2:
+                self._sleep(RETRY_BACKOFF)
+            self._wait(host)
+            try:
+                r = self._client.get(url, timeout=timeout)
+            except httpx.TransportError as e:
+                last = type(e).__name__
+                continue
+            if r.status_code in RETRY_STATUSES:
+                last = f"HTTP {r.status_code}"
+                continue
+            return r
+        raise self._mark_down(host, f"Source unavailable ({host}: {last} after 2 attempts, timeout {timeout:g}s)")
 
     def _wait(self, host: str) -> None:
         with self._lock:
@@ -70,11 +105,7 @@ class PoliteClient:
         c = self._robots.get(base)
         if c is None or self._clock() - c.at > ROBOTS_SECONDS:
             rp = urllib.robotparser.RobotFileParser()
-            self._wait(parts.netloc)
-            try:
-                r = self._client.get(base + "/robots.txt")
-            except httpx.HTTPError as e:
-                raise self._mark_down(parts.netloc, f"Source unavailable ({parts.netloc}: {type(e).__name__})") from None
+            r = self._get(base + "/robots.txt", parts.netloc)
             if r.status_code in (401, 403):
                 rp.disallow_all = True  # robots.txt itself is refused to an identified client -> not permitted
             elif r.status_code >= 400:
@@ -94,11 +125,7 @@ class PoliteClient:
         if not ok:
             raise SourceUnavailable(why)
         host = urlsplit(url).netloc
-        self._wait(host)
-        try:
-            r = self._client.get(url)
-        except httpx.HTTPError as e:
-            raise self._mark_down(host, f"Source unavailable ({host}: {type(e).__name__})") from None
+        r = self._get(url, host)
         if r.status_code in (401, 403, 429):
             raise SourceUnavailable(f"Source unavailable ({host} answered HTTP {r.status_code}; not retried)")
         if r.status_code >= 400:
@@ -113,5 +140,5 @@ _default: PoliteClient | None = None
 def default_client() -> PoliteClient:
     global _default
     if _default is None:
-        _default = PoliteClient()
+        _default = PoliteClient.from_settings()
     return _default

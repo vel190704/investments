@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     refresh_minute: int = 30
     startup_refresh_max_age_hours: int = 18
     http_timeout_seconds: float = 30.0
+    source_timeout_seconds: float = 25.0  # news/announcement feeds (polite client), per request
+    source_timeouts: dict[str, float] = {}  # per-host override, e.g. {"nsearchives.nseindia.com": 40}
     # Secrets: only from .env / environment. Never stored in the DB, returned by the API or logged.
     anthropic_api_key: str = ""
     claude_model: str = ""  # default LLM model (Settings can override)

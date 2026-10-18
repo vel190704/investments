@@ -201,7 +201,7 @@ def test_phase4_endpoints_degrade_without_network_or_key(client, workbook, monke
 
     def boom(req):
         raise httpx.ConnectError("offline")
-    monkeypatch.setattr(polite, "_default", polite.PoliteClient(transport=httpx.MockTransport(boom), min_interval=0))
+    monkeypatch.setattr(polite, "_default", polite.PoliteClient(transport=httpx.MockTransport(boom), min_interval=0, sleep=lambda _s: None))
     r = client.post("/api/news/refresh")
     assert r.status_code == 200 and r.json()["added"] == 0
     feed = client.get("/api/news").json()
