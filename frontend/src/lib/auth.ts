@@ -13,7 +13,7 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 // Fail closed: sign-in is required unless NEXT_PUBLIC_DEV_AUTH is exactly "1" (local `make dev` sets it).
 export const AUTH_MODE: "dev" | "supabase" = process.env.NEXT_PUBLIC_DEV_AUTH === "1" ? "dev" : "supabase";
-export const PUBLIC_PATHS = ["/login", "/auth/callback", "/terms"];
+export const PUBLIC_PATHS = ["/login", "/auth/callback", "/terms", "/help"];
 /** Set in a Vercel preview that points at a Supabase project not on its allow-list: sign-in is then disabled. */
 export const PREVIEW_PROBLEM = previewProblem(process.env.NEXT_PUBLIC_VERCEL_ENV, SUPABASE_URL,
                                               process.env.NEXT_PUBLIC_PREVIEW_SUPABASE_REFS);

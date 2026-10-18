@@ -103,6 +103,9 @@ make migrate        # apply migrations now (backs up first)
 - **Deployment** (Vercel + Render + Supabase, CI, preview vs production, rollback, custom domain):
   [docs/DEPLOY.md](docs/DEPLOY.md). The backend ships as a Docker image (`backend/Dockerfile`, non-root,
   health check); every push and pull request runs CI (`.github/workflows/ci.yml`).
+- **Going live and running it:** [docs/LAUNCH.md](docs/LAUNCH.md) (go-live checklist, incident runbook),
+  [docs/OPERATIONS.md](docs/OPERATIONS.md) (backups with a proven restore, uptime and cold starts, kill switches),
+  [docs/SECURITY.md](docs/SECURITY.md) (security review, `make audit`). Friends and family read `/help` in the app.
 - **Everywhere else** sign-in is required (fail closed): unset or unknown `ENV` counts as production,
   `DEV_AUTH=1` outside development/test refuses to start, and without Supabase settings the app
   refuses to start. Sign-in is by email magic link; only invited emails get in

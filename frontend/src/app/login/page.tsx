@@ -21,7 +21,7 @@ export default function LoginPage() {
   }
   return (
     <>
-      <PageHeader title="Sign in" subtitle="Invite-only. We email you a one-time sign-in link; there is no password." />
+      <PageHeader title="Sign in" subtitle={<>Invite-only. We email you a one-time sign-in link; there is no password. New here? Read <Link className="underline" href="/help">How to use this app</Link>.</>} />
       <Section title="Email">
         {AUTH_MODE === "dev" ? (
           <p className="text-sm text-muted-foreground">Local dev mode: no sign-in needed. <Link className="underline" href="/">Open the dashboard</Link>.</p>

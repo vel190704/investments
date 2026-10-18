@@ -145,7 +145,7 @@ Do this twice: once named `investments-prod`, once `investments-preview`.
      `investments_app.<project-ref>`. Make it
      `DATABASE_URL=postgresql+psycopg://investments_app.<project-ref>:<app role password>@<pooler host>:5432/postgres`.
 8. **Backups**: production on a paid plan has daily backups (and point-in-time recovery as an add-on). Details in
-   the backups section (checkpoint 6c).
+   [OPERATIONS.md §1](OPERATIONS.md#1-backups).
 
 ## 6. Render backend (production and preview)
 
@@ -297,7 +297,7 @@ feature branch ──push──▶ GitHub Actions: checks + docker      Vercel: 
   starts with the same environment.
 - **Database**: a rollback of code does not undo migrations. Keep migrations backward-compatible (add columns and
   tables first; remove only in a later release) so the previous version still runs. Migration 0008 (multi-user) is
-  one-way; recovering from it means restoring a backup (backups section, 6c).
+  one-way; recovering from it means restoring a backup ([OPERATIONS.md §1.3](OPERATIONS.md#13-prove-a-restore-make-restore-test)). Migrations 0011 (feedback) and 0012 (kill switches) only add a table or column, so the previous release still runs on them.
 - **Then fix forward**: `git revert <commit>` on a branch › pull request › merge. Rollbacks in dashboards are
   temporary; the next deploy from `main` replaces them.
 

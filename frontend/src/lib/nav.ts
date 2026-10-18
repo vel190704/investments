@@ -6,7 +6,7 @@ export type NavGroup = { title: string; links: NavLink[] };
 /** Advanced pages hidden from the menu in simple mode (still reachable by URL). */
 export const ADVANCED = ["/valuation", "/overlap", "/fundamentals", "/macro"];
 /** Never hidden, in any mode. */
-export const ALWAYS_VISIBLE = ["/", "/holdings/stocks", "/holdings/funds", "/allocation", "/simulator", "/planner", "/projection"];
+export const ALWAYS_VISIBLE = ["/", "/holdings/stocks", "/holdings/funds", "/allocation", "/simulator", "/planner", "/projection", "/help"];
 
 export const GROUPS: NavGroup[] = [
   { title: "Overview", links: [
@@ -50,6 +50,7 @@ export const GROUPS: NavGroup[] = [
   { title: "You", links: [
     { href: "/account", label: "Account" },
     { href: "/admin", label: "Admin", adminOnly: true },
+    { href: "/help", label: "How to use" },
     { href: "/terms", label: "Terms & data" },
   ] },
 ];

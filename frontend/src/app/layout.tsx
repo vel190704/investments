@@ -29,7 +29,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <footer className="border-t border-border px-4 py-4 text-xs text-muted-foreground md:px-8">
             Personal analytics tool, not investment advice. Figures are historical or derived from the stated
             sources and dates; scenarios are mathematical illustrations, not predictions. Nothing here places orders.
-            {" "}<a className="underline" href="/terms">Terms &amp; data</a>
+            {" "}<a className="underline" href="/help">How to use</a>
+            {" · "}<a className="underline" href="/terms">Terms &amp; data</a>
             <FeedbackButton />
           </footer>
         </div>
