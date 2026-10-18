@@ -1,6 +1,7 @@
 # CLAUDE.md — conventions for this repo
 
-Personal, single-user, local-first investment **analytics** dashboard (Indian retail investor).
+Invite-only, multi-user investment **analytics** web app for ~5-15 friends and family (Indian retail investors;
+Phase 6). Each user uploads their own Excel workbook.
 It never places orders and never connects to a broker or platform account: **Excel (plus the
 in-app transaction form) is the only input for holdings and transactions.** See PLAN.md for the design and README.md for usage.
 
@@ -19,7 +20,10 @@ in-app transaction form) is the only input for holdings and transactions.** See 
 - `make logs` / `make logs-errors` — follow `logs/app.log` (all / WARNING and above)
 - Backend only: `cd backend && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload`
 - Frontend only: `cd frontend && npm run dev`
-- CLI import: `cd backend && .venv/bin/python -m app.import_excel ../data/<file>.xlsx` (`--dry-run` to preview)
+- CLI import: `cd backend && .venv/bin/python -m app.import_excel ../data/<file>.xlsx [--user EMAIL]` (`--dry-run` to preview)
+- `make pg-up` / `make test-postgres` / `make test-all-postgres` — local throwaway Postgres for tests (Docker)
+- One-time data move: `cd backend && .venv/bin/python -m app.tools.sqlite_to_postgres --sqlite <file>
+  --owner-email <you>` (target URL from `TARGET_DATABASE_URL`; refuses a non-empty target; compares totals)
 
 ## Working rules
 - Work in phases; finish a phase, then stop and summarise for review.
@@ -50,12 +54,31 @@ in-app transaction form) is the only input for holdings and transactions.** See 
   decision. Don't reintroduce them.
 
 ## Architecture rules
-- Single user: no auth, no user tables, no `user_id`. Backend binds to 127.0.0.1 only.
+- Multi-user (Phase 6): see "Users and isolation" below. Local dev still binds to 127.0.0.1.
 - DB access only through `app/db.py` + `app/repository.py`; switching to Postgres must be a
   `DATABASE_URL` change.
 - `app/calc/` holds pure functions (no DB, no network) — that is what tests target.
 - Market data sits behind the `PriceProvider` interface; results are cached in `price_quotes`.
   Pages read from the DB; only refresh jobs hit the network.
+
+## Users and isolation (Phase 6)
+- Per-user tables inherit `UserOwned` (models.py). Never filter by user_id by hand: sessions carry the user and
+  `app/tenancy.py` adds `user_id = :uid` to every ORM SELECT/UPDATE/DELETE (incl. `session.get`) and stamps new rows.
+  A session with neither a user nor `system=True` cannot touch per-user tables (fail closed).
+- Routes get the user's session from `app/auth.py::get_session`; admin routes use `require_admin` /
+  `get_admin_session`. Use `session_scope(system=True)` only for global jobs and admin maintenance.
+- Market data is global (securities, price_quotes, intraday_ticks, security_facts, security_sectors, news, macro,
+  annual_financials, peer_metrics). Never store anything about a user there, and never show a user global rows
+  that reveal another user's holdings (e.g. filter news and refresh results to the user's own securities).
+- Core INSERTs on per-user tables go through `repository.insert_ignore` (it stamps the owner).
+- `tests/test_isolation.py` attacks EVERY route as another user and must stay green; a new route needs a case
+  there (the test fails on uncovered routes). Postgres RLS (migration 0009) is defence in depth.
+- Jobs run once globally (`app/jobs.py`, `scheduler.run_job` under `job_lock`); per-user steps loop users with
+  `jobs.for_each_user`.
+- Auth: Supabase JWT (JWKS/HS256) and the invite list; `AUTH_MODE=dev` is local only and refused in production.
+- Logs carry the numeric user id (`uid=`), never emails, financial figures, workbook contents or journal text.
+- Postgres-only behaviour (string lengths, RLS, advisory locks) is tested with `make pg-up && make test-postgres`;
+  `make test-all-postgres` runs the whole suite on Postgres.
 
 ## Money and numbers
 - Money is integer **paise** (`*_paise`); never float. Quantities/prices/NAVs/weights are
@@ -105,8 +128,10 @@ in-app transaction form) is the only input for holdings and transactions.** See 
   wording, citations to input ids, schema); failures are flagged, never shown as analysis.
   Bump `PROMPT_VERSION` when the prompt or schema changes. Card kinds: stock, fund, portfolio
   (`app/llm/prompts.py::KINDS`); fund and portfolio inputs are built by code only.
+- AI is off for non-admin users until the admin enables it per user; caps: the user's own, the admin's per-user
+  cap, and a global cap for the platform key (`llm_platform`). Optional own key: Fernet-encrypted, never returned.
 - Model id is free text (Settings › llm, then `CLAUDE_MODEL`, then `claude-opus-5-5`). No token
-  prices ship with the app (cost is N/A until the user sets them). Refusal fallback is opt-in
+  prices ship with the app (cost is N/A until the admin sets them in llm_platform). Refusal fallback is opt-in
   (default off); cards show the answering model and the requested one when they differ.
 - Don't make live LLM calls during development without the user's approval (it costs money).
 - The thesis journal is append-only (no update/delete paths).
@@ -153,13 +178,16 @@ in-app transaction form) is the only input for holdings and transactions.** See 
 ## Live intraday prices
 - Market hours: `app/calc/market_hours.py` (09:15 inclusive – 15:30 exclusive IST, Mon–Fri, minus the user's
   holiday table in Settings › market_holidays, which ships empty; never scrape the NSE list).
-- Poll only stocks/ETFs, only when Settings › live is enabled, the market is open and a viewer was seen recently;
+- One shared poller for the securities held by any user; it runs only when the market is open and a user with
+  Settings › live on was seen recently;
   one batched request per cycle; backoff on failures; manual refresh is the only write outside market hours.
 - Real quotes only; never simulate or interpolate. Stale = older than 2 poll intervals; totals use fresh quotes
   only and list what was left out. `intraday_ticks` (14-day retention) never feeds price_quotes, snapshots, XIRR or
   history.
 
 ## Settings
+- Per-user sections live in `app_settings` (user_id, key); platform sections (`news`, `market_holidays`,
+  `live_platform`, `llm_platform`) in `platform_settings`, admin-only writes.
 - User choices have no invented defaults: targets and the emergency fund start unset ("Set your
   targets", empty state). Projection rates ship as flagged placeholders until reviewed.
 - The monthly budget and split come from the workbook's `monthly_plan`; planner overrides are

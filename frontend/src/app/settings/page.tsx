@@ -5,6 +5,7 @@ import { ErrorBox, Loading, Notice, PageHeader, Section } from "@/components/com
 import { Field, Select, numeric, rupeesToPaise } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useMe } from "@/components/auth-gate";
 import { apiDelete, apiPost, apiPut, errorText, useApi, type LlmUsage, type Lookthrough, type SectorsPage, type Settings } from "@/lib/api";
 import { formatINR } from "@/lib/format";
 
@@ -19,17 +20,20 @@ const fromPct = (p: string) => String(Number(p) / 100);
 
 export default function SettingsPage() {
   const { data, error, loading, reload } = useApi<Settings>("/settings");
+  const { me } = useMe();
+  const admin = !!me?.is_admin;
   return (
     <>
-      <PageHeader title="Settings" subtitle="Stored locally in your database. The monthly budget and split always come from the monthly_plan sheet of your workbook." />
+      <PageHeader title="Settings" subtitle="Your settings apply only to you. The monthly budget and split always come from the monthly_plan sheet of your workbook. Sections marked “platform” apply to everyone and only the admin can change them." />
       {error && <ErrorBox message={error} />}
       {loading && !data && <Loading />}
       {data && (
         <div className="flex flex-col gap-4">
           <AiSettings s={data} onSaved={reload} />
+          {admin && <AiPlatform s={data} onSaved={reload} />}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <LiveSettings s={data} onSaved={reload} />
-            <MarketHolidays s={data} onSaved={reload} />
+            <LiveSettings s={data} onSaved={reload} admin={admin} />
+            <MarketHolidays s={data} onSaved={reload} admin={admin} />
           </div>
           <Targets s={data} onSaved={reload} />
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -48,7 +52,7 @@ export default function SettingsPage() {
           </div>
           <Emergency s={data} onSaved={reload} />
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <NewsFeeds s={data} onSaved={reload} />
+            <NewsFeeds s={data} onSaved={reload} admin={admin} />
             <AlertRules s={data} onSaved={reload} />
           </div>
           <p className="text-xs text-muted-foreground">
@@ -436,8 +440,7 @@ function ConnectionTest({ model, savedFallback }: { model: string; savedFallback
 function AiSettings({ s, onSaved }: { s: Settings; onSaved: () => void }) {
   const v = s.sections.llm.value;
   const [form, setForm] = useState({
-    ...v, model: v.model ?? "", price_in_per_mtok: v.price_in_per_mtok ?? "", price_out_per_mtok: v.price_out_per_mtok ?? "",
-    monthly_call_cap: String(v.monthly_call_cap),
+    ...v, model: v.model ?? "", monthly_call_cap: String(v.monthly_call_cap),
   });
   const status = useApi<{ gate: string | null; usage: LlmUsage }>("/llm/status");
   const page = useApi<{ settings: { model: string } }>("/analysis");
@@ -445,16 +448,15 @@ function AiSettings({ s, onSaved }: { s: Settings; onSaved: () => void }) {
   const submit = (patch: Partial<typeof form> = {}) => {
     const f = { ...form, ...patch };
     setForm(f);
-    save({ ...f, model: f.model.trim() || null, monthly_call_cap: Number(f.monthly_call_cap),
-           price_in_per_mtok: f.price_in_per_mtok || null, price_out_per_mtok: f.price_out_per_mtok || null });
+    save({ ...f, model: f.model.trim() || null, monthly_call_cap: Number(f.monthly_call_cap) });
   };
   return (
     <Section title="AI analysis (LLM)" aside={v.outbound_enabled ? "Outbound calls allowed" : "Privacy: outbound calls OFF"}>
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" className="mt-1" checked={form.outbound_enabled} disabled={busy}
                onChange={(e) => submit({ outbound_enabled: e.target.checked })} />
-        <span><b>Allow outbound LLM calls.</b> Off by default. When off, nothing is sent to any AI provider. The API key lives only in
-          <code> .env</code> (<code>ANTHROPIC_API_KEY</code>).</span>
+        <span><b>Allow outbound LLM calls.</b> Off by default. When off, nothing is sent to any AI provider. The app&apos;s
+          API key stays on the server; AI must also be enabled for your account by the admin.</span>
       </label>
       <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-5">
         <Field label="Model id" hint={`In use: ${page.data?.settings.model ?? "…"} (blank = CLAUDE_MODEL from .env)`}>
@@ -465,11 +467,8 @@ function AiSettings({ s, onSaved }: { s: Settings; onSaved: () => void }) {
             {["low", "medium", "high", "xhigh", "max"].map((m) => <option key={m}>{m}</option>)}
           </Select>
         </Field>
-        <Field label="Monthly call cap"><Input inputMode="numeric" value={form.monthly_call_cap} onChange={(e) => setForm({ ...form, monthly_call_cap: e.target.value.replace(/\D/g, "") })} /></Field>
-        <Field label="$ per M input tokens" hint="no default"><Input inputMode="decimal" placeholder="not set" value={form.price_in_per_mtok} onChange={(e) => setForm({ ...form, price_in_per_mtok: numeric(e.target.value) })} /></Field>
-        <Field label="$ per M output tokens" hint="no default"><Input inputMode="decimal" placeholder="not set" value={form.price_out_per_mtok} onChange={(e) => setForm({ ...form, price_out_per_mtok: numeric(e.target.value) })} /></Field>
+        <Field label="Your monthly call cap" hint="the admin's cap for you also applies"><Input inputMode="numeric" value={form.monthly_call_cap} onChange={(e) => setForm({ ...form, monthly_call_cap: e.target.value.replace(/\D/g, "") })} /></Field>
       </div>
-      <p className="mt-1 text-xs text-status-moderate">Prices are only used for the cost estimate. Verify them against the provider&apos;s pricing page for the model you use.</p>
       <label className="mt-3 flex items-start gap-2 text-sm">
         <input type="checkbox" className="mt-1" checked={form.refusal_fallback} onChange={(e) => setForm({ ...form, refusal_fallback: e.target.checked })} />
         <span>Refusal fallback (default off): if the model declines a request, let the provider re-run it on its recommended fallback
@@ -558,11 +557,14 @@ function SectorRules({ s, onSaved }: { s: Settings; onSaved: () => void }) {
   );
 }
 
-function NewsFeeds({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+function NewsFeeds({ s, onSaved, admin }: { s: Settings; onSaved: () => void; admin: boolean }) {
   const [feeds, setFeeds] = useState(s.sections.news.value.feeds);
   const { save, reset, busy, feedback } = useSaver("news", onSaved);
   return (
-    <Section title="News feeds" aside="robots.txt is checked before every fetch">
+    <Section title="News feeds (platform)" aside="robots.txt is checked before every fetch">
+      {!admin ? (
+        <ul className="text-sm">{feeds.map((f) => <li key={f.url}>{f.name} <span className="text-xs text-muted-foreground">{f.url}</span></li>)}</ul>
+      ) : (
       <div className="flex flex-col gap-2">
         {feeds.map((f, i) => (
           <div key={i} className="grid grid-cols-[8rem_1fr_auto] gap-2">
@@ -573,12 +575,15 @@ function NewsFeeds({ s, onSaved }: { s: Settings; onSaved: () => void }) {
         ))}
         <div><Button variant="outline" size="sm" onClick={() => setFeeds([...feeds, { name: "", url: "https://" }])}>Add feed</Button></div>
       </div>
+      )}
       <p className="mt-2 text-xs text-muted-foreground">NSE&apos;s official announcement feeds are always used. Google News RSS is attempted but its robots.txt disallows automated access, so it shows as unavailable.</p>
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <Button disabled={busy} onClick={() => save({ feeds })}>Save feeds</Button>
-        {s.sections.news.is_set && <Button variant="ghost" disabled={busy} onClick={reset}>Reset to defaults</Button>}
-        {feedback}
-      </div>
+      {admin && (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <Button disabled={busy} onClick={() => save({ feeds })}>Save feeds</Button>
+          {s.sections.news.is_set && <Button variant="ghost" disabled={busy} onClick={reset}>Reset to defaults</Button>}
+          {feedback}
+        </div>
+      )}
     </Section>
   );
 }
@@ -611,24 +616,31 @@ function AlertRules({ s, onSaved }: { s: Settings; onSaved: () => void }) {
   );
 }
 
-function LiveSettings({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+function LiveSettings({ s, onSaved, admin }: { s: Settings; onSaved: () => void; admin: boolean }) {
   const v = s.sections.live.value;
+  const plat = s.sections.live_platform.value;
   const [enabled, setEnabled] = useState(v.enabled);
-  const [poll, setPoll] = useState(String(v.poll_seconds));
-  const { save, busy, feedback } = useSaver("live", onSaved);
+  const [poll, setPoll] = useState(String(plat.poll_seconds));
+  const mine = useSaver("live", onSaved);
+  const platform = useSaver("live_platform", onSaved);
   return (
     <Section title="Live prices" aside={v.enabled ? "On" : "Off"}>
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" className="mt-1" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        <span>Poll intraday quotes for direct stocks and ETFs during market hours (09:15–15:30 IST, Mon–Fri, excluding
-          the holidays listed here), only while a page showing live prices is open. Mutual funds are never polled.</span>
+        <span>Show live intraday quotes for my direct stocks and ETFs during market hours (09:15–15:30 IST, Mon–Fri,
+          excluding the market holidays). Quotes are fetched once for everyone and only while someone with live prices
+          on is looking. Mutual funds are never polled.</span>
       </label>
       <div className="mt-3 flex flex-wrap items-end gap-3">
-        <Field label="Poll interval (seconds)" hint="30–300; one batched request per interval">
-          <Input inputMode="numeric" className="w-28" value={poll} onChange={(e) => setPoll(e.target.value.replace(/\D/g, ""))} />
+        <Button disabled={mine.busy} onClick={() => mine.save({ enabled })}>Save</Button>
+        {mine.feedback}
+      </div>
+      <div className="mt-4 flex flex-wrap items-end gap-3 border-t border-border pt-3">
+        <Field label="Poll interval (seconds, platform)" hint="30–300; one batched request per interval">
+          <Input inputMode="numeric" className="w-28" value={poll} disabled={!admin} onChange={(e) => setPoll(e.target.value.replace(/\D/g, ""))} />
         </Field>
-        <Button disabled={busy} onClick={() => save({ enabled, poll_seconds: Number(poll) })}>Save</Button>
-        {feedback}
+        {admin && <Button variant="outline" disabled={platform.busy} onClick={() => platform.save({ poll_seconds: Number(poll) })}>Save interval</Button>}
+        {platform.feedback}
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
         A quote older than two intervals is marked delayed/stale and left out of live totals. Quotes are real 1-minute
@@ -639,7 +651,27 @@ function LiveSettings({ s, onSaved }: { s: Settings; onSaved: () => void }) {
   );
 }
 
-function MarketHolidays({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+function AiPlatform({ s, onSaved }: { s: Settings; onSaved: () => void }) {
+  const v = s.sections.llm_platform.value;
+  const [f, setF] = useState({ cap: String(v.global_monthly_cap), pin: v.price_in_per_mtok ?? "", pout: v.price_out_per_mtok ?? "" });
+  const { save, busy, feedback } = useSaver("llm_platform", onSaved);
+  return (
+    <Section title="AI platform (admin)" aside="applies to everyone using the app's key">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <Field label="Global monthly call cap" hint="all calls on the app's key, every user"><Input inputMode="numeric" value={f.cap} onChange={(e) => setF({ ...f, cap: e.target.value.replace(/\D/g, "") })} /></Field>
+        <Field label="$ per M input tokens" hint="no default"><Input inputMode="decimal" placeholder="not set" value={f.pin} onChange={(e) => setF({ ...f, pin: numeric(e.target.value) })} /></Field>
+        <Field label="$ per M output tokens" hint="no default"><Input inputMode="decimal" placeholder="not set" value={f.pout} onChange={(e) => setF({ ...f, pout: numeric(e.target.value) })} /></Field>
+      </div>
+      <p className="mt-1 text-xs text-status-moderate">Prices are only used for cost estimates. Verify them against the provider&apos;s pricing page for the model in use. Enable AI per person on the Admin page.</p>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button disabled={busy} onClick={() => save({ global_monthly_cap: Number(f.cap), price_in_per_mtok: f.pin || null, price_out_per_mtok: f.pout || null })}>Save</Button>
+        {feedback}
+      </div>
+    </Section>
+  );
+}
+
+function MarketHolidays({ s, onSaved, admin }: { s: Settings; onSaved: () => void; admin: boolean }) {
   const [rows, setRows] = useState(s.sections.market_holidays.value.holidays);
   const [date, setDate] = useState("");
   const [name, setName] = useState("");
@@ -652,7 +684,7 @@ function MarketHolidays({ s, onSaved }: { s: Settings; onSaved: () => void }) {
   };
   return (
     <section id="market-holidays">
-      <Section title="Market holidays (NSE)" aside={`${rows.length} entered`}>
+      <Section title="Market holidays (NSE, platform)" aside={`${rows.length} entered${admin ? "" : " · admin edits"}`}>
         <p className="text-xs text-status-moderate">
           Enter these by hand and verify them against the NSE holiday list (nseindia.com › Resources › Exchange
           Communication › Holidays). Nothing is scraped. Until a holiday is entered, that weekday is treated as a trading day.
@@ -662,17 +694,17 @@ function MarketHolidays({ s, onSaved }: { s: Settings; onSaved: () => void }) {
           {rows.map((r) => (
             <li key={r.date} className="flex items-center justify-between border-b border-border py-1 last:border-0">
               <span className="tnum">{r.date} · {r.name}</span>
-              <button className="text-xs underline" onClick={() => setRows(rows.filter((x) => x.date !== r.date))}>remove</button>
+              {admin && <button className="text-xs underline" onClick={() => setRows(rows.filter((x) => x.date !== r.date))}>remove</button>}
             </li>
           ))}
         </ul>
-        <div className="mt-3 flex flex-wrap items-end gap-2">
+        {admin && <div className="mt-3 flex flex-wrap items-end gap-2">
           <Field label="Date"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
           <Field label="Name"><Input placeholder="e.g. Diwali Laxmi Pujan" value={name} onChange={(e) => setName(e.target.value)} /></Field>
           <Button variant="outline" onClick={add}>Add</Button>
           <Button disabled={busy} onClick={() => save({ holidays: rows })}>Save holidays</Button>
           {feedback}
-        </div>
+        </div>}
       </Section>
     </section>
   );

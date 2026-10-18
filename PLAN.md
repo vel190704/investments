@@ -1042,13 +1042,13 @@ connects to a broker. Three checkpoints, each reviewed before the next: **6a mul
 | sector_assignments | origins EXCEL and MANUAL only (the NSE origin moves to securities) |
 | instrument_facts | origin MANUAL only (AUTO moves to security_facts) |
 | sector_sensitivities | primary key (user_id, sector) |
-| macro_values (MANUAL rows) | AUTO rows have user_id NULL (global); MANUAL rows are the user's |
 
 **Global market data** (no user_id): `securities` (new: one row per NSE symbol or AMFI scheme code, with ISIN,
 ETF underlying, AMFI category), `price_quotes` and `intraday_ticks` (re-keyed from instrument_id to security_id),
 `security_facts` (AUTO fundamentals, new), `security_sectors` (NSE sector lists, new), `annual_financials`,
 `peer_metrics`, `news_items` (by ISIN), `news_source_status`, `macro_values` (AUTO), `source_events`,
-`refresh_runs`, `snapshot_gaps` (the app was down for everyone), `platform_settings` (new: news feeds, market
+`refresh_runs`, `macro_values` (AUTO and MANUAL: repo rate and CPI are national facts; manual edits are admin-only),
+`snapshot_gaps` (the app was down for everyone), `platform_settings` (new: news feeds, market
 holidays, live poll interval, global AI cap, default model, token prices).
 
 **Accounts**: `users` (id, auth_subject = Supabase user uuid, email, role admin|user, ai_enabled,
@@ -1141,7 +1141,21 @@ terms page, feedback form, uptime (6c).
 ### 15.10 Assumptions (6a)
 1. Instruments are per user, not shared; two users holding LT have two instrument rows linked to one security.
    This keeps workbook names, overrides and confirmations private and makes isolation simple.
-2. Manual macro values (repo rate, CPI) are per user; automated ones are global.
+2. Manual macro values (repo rate, CPI) are global and admin-edited (changed from the first draft: they are national
+   facts, not personal choices). Sector sensitivity tags stay per user.
 3. Snapshot gaps are global (the server was down for everyone).
 4. Integer user ids internally (logged), mapped to the Supabase uuid; emails are not logged.
 5. Supabase's Data API is not used by the app; DEPLOY.md says to restrict it, and RLS denies its roles anyway.
+
+### 15.11 Checkpoint 6a: what was built and found
+- Isolation: every route is attacked as another user (`tests/test_isolation.py`, also on Postgres). On a normal run
+  that is 94 routes and 0 leaks. With the per-user filter switched off as a self-check, the same attack finds 35
+  leaking routes and changes in 14 of the victim's tables, so the test would catch a forgotten filter.
+- Running the whole suite on Postgres found two bugs SQLite hid: `macro_values.status` was VARCHAR(10) but stores
+  "UNAVAILABLE" (migration 0010 widens it), and psycopg reports rowcount -1 for multi-row inserts (insert_ignore
+  now counts with RETURNING).
+- A concurrent first request of a new user could create the account twice: user creation is now race-safe.
+- Global tables must not reveal holdings: refresh-run results, news, AI category suggestions and alerts are
+  filtered to the user's own securities/companies.
+- Data move: the user's real database (copied) moved into a Postgres account with identical totals; "before" was
+  computed by the pre-6a code on the original schema.

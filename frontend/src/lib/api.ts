@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { BACKEND_DOWN, messageFromBody, messageFromText, withSuffix } from "./apierror";
+import { AUTH_MODE, PUBLIC_PATHS, accessToken } from "./auth";
 
 // ---- types (money: integer paise; decimals: strings) ----
 export type Xirr = { rate: string | null; note: string | null };
@@ -195,15 +196,16 @@ export type Settings = {
     themes: SettingsSection<Record<string, string[]> | null>;
     health: SettingsSection<Record<string, Record<string, string>>>;
     llm: SettingsSection<{ outbound_enabled: boolean; model: string | null; monthly_call_cap: number; weekly_job: boolean;
-                           price_in_per_mtok: string | null; price_out_per_mtok: string | null; effort: string;
-                           refusal_fallback: boolean }>;
+                           effort: string; refusal_fallback: boolean }>;
+    llm_platform: SettingsSection<{ global_monthly_cap: number; price_in_per_mtok: string | null; price_out_per_mtok: string | null }>;
+    live_platform: SettingsSection<{ poll_seconds: number }>;
     rubric: SettingsSection<{ pe_vs_peer_tolerance_pct: string; peg_max: string; roe_min_pct: string; de_max: string;
                               fcf_positive: boolean; fcf_not_declining: boolean }>;
     sector_rules: SettingsSection<Record<string, string[]>>;
     news: SettingsSection<{ feeds: { name: string; url: string }[] }>;
     alerts: SettingsSection<{ announcement: boolean; announcement_categories: string[]; concentration_change: boolean;
                               disclosure_stale: boolean; review_due: boolean }>;
-    live: SettingsSection<{ enabled: boolean; poll_seconds: number }>;
+    live: SettingsSection<{ enabled: boolean }>;
     market_holidays: SettingsSection<{ holidays: { date: string; name: string }[] }>;
   };
 };
@@ -417,12 +419,40 @@ async function handle<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function send(path: string, init?: RequestInit): Promise<Response> {
+// Production: NEXT_PUBLIC_API_URL is the backend origin (CORS-restricted to this site). Local dev: empty, and
+// /api/* is proxied to the backend by next.config.ts.
+const API_BASE = `${process.env.NEXT_PUBLIC_API_URL ?? ""}/api`;
+
+async function send(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = await accessToken();
+  const headers = new Headers(init.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  let res: Response;
   try {
-    return await fetch(`/api${path}`, init);
+    res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   } catch {
     throw new ApiError(BACKEND_DOWN, 0, null, BACKEND_DOWN);  // network error: the app server is not reachable
   }
+  if (res.status === 401 && AUTH_MODE === "supabase" && typeof window !== "undefined"
+      && !PUBLIC_PATHS.includes(window.location.pathname)) {
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full reload clears all state
+    window.location.href = "/login";  // session missing or expired
+  }
+  return res;
+}
+
+/** Download a file from the API (with the auth header, which a plain link would not send). */
+export async function apiDownload(path: string, fallbackName: string): Promise<void> {
+  const res = await send(path, { cache: "no-store" });
+  if (!res.ok) await handle(res);
+  const blob = await res.blob();
+  const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
@@ -445,8 +475,13 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
   }));
 }
 
-export async function apiDelete<T>(path: string): Promise<T> {
-  return handle<T>(await send(path, { method: "DELETE" }));
+export async function apiDelete<T>(path: string, body?: unknown): Promise<T> {
+  const init: RequestInit = { method: "DELETE" };
+  if (body !== undefined) {
+    init.body = JSON.stringify(body);
+    init.headers = { "Content-Type": "application/json" };
+  }
+  return handle<T>(await send(path, init));
 }
 
 export function errorText(e: unknown): string {

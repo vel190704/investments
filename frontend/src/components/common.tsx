@@ -4,6 +4,7 @@ import type { AsOf, Flag } from "@/lib/api";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { parseErrorText } from "@/lib/apierror";
+import { Onboarding } from "@/components/onboarding";
 import { RequestId } from "@/components/request-id";
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
@@ -124,12 +125,7 @@ export function Notice({ children, tone = "info" }: { children: ReactNode; tone?
 }
 
 export function EmptyState() {
-  return (
-    <Notice>
-      No portfolio data yet. Import your workbook on the <a className="underline" href="/import">Import</a> page,
-      confirm identifiers on <a className="underline" href="/mappings">Mappings</a>, then refresh prices.
-    </Notice>
-  );
+  return <Onboarding />;
 }
 
 /** Footer required on analysis pages. */

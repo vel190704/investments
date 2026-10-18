@@ -39,18 +39,17 @@ export function useLive() {
     };
   }, [enabled, everyMs, load]);
 
-  const pollSeconds = data?.poll_seconds ?? 60;
   const setEnabled = useCallback(async (on: boolean) => {
     setBusy(true);
     try {
-      await apiPut("/settings/live", { enabled: on, poll_seconds: pollSeconds });
+      await apiPut("/settings/live", { enabled: on });
       await load();
     } catch (e) {
       setError(errorText(e));
     } finally {
       setBusy(false);
     }
-  }, [pollSeconds, load]);
+  }, [load]);
 
   const refresh = useCallback(async () => {
     setBusy(true);

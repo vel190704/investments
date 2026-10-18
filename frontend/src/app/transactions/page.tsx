@@ -6,7 +6,7 @@ import { Field, Select, numeric } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { apiDelete, apiPost, errorText, useApi, type InstrumentRef, type Txn } from "@/lib/api";
+import { apiDelete, apiDownload, apiPost, errorText, useApi, type InstrumentRef, type Txn } from "@/lib/api";
 import { formatDate, formatINR, formatPrice, formatQty } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -38,7 +38,7 @@ export default function TransactionsPage() {
       <PageHeader
         title="Transactions"
         subtitle="Workbook rows (excel) are managed in your Excel file. In-app entries (ui) are added here and are never removed by a re-import."
-        actions={<a href="/api/export.xlsx" className="inline-flex h-8 items-center rounded-lg border border-border px-2.5 text-sm hover:bg-muted">Export to Excel</a>}
+        actions={<Button variant="outline" onClick={() => apiDownload("/export.xlsx", "investment_tracker_export.xlsx")}>Export to Excel</Button>}
       />
       <div className="flex flex-col gap-4">
         <AddForm instruments={instruments.data ?? []} onAdded={(m) => { setMsg(m); setErr(null); txns.reload(); instruments.reload(); }} />

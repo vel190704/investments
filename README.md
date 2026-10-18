@@ -1,7 +1,8 @@
 # Personal Investment Dashboard
 
-A personal, single-user, local-first **portfolio analytics and planning** tool for an Indian
-retail investor (Groww stocks/ETFs + Zerodha Coin mutual funds). It reads your Excel tracker,
+An invite-only, multi-user **portfolio analytics and planning** web app for a small group of
+Indian retail investors (friends and family; Groww stocks/ETFs + Zerodha Coin mutual funds).
+Each person uploads their own Excel tracker and sees only their own data. It reads your Excel tracker,
 values holdings with public market data, and shows allocation, concentration, and how a next
 contribution would change your mix.
 
@@ -30,7 +31,10 @@ Phase 5 adds:
 or platform account; you copy figures from Groww/Coin into the workbook (or the in-app form)
 and import. The AI works only from what you import.
 
-It **never places orders**, has no login, and binds only to `127.0.0.1`.
+Phase 6 adds accounts: invite-only sign-in (Supabase Auth), per-user data isolation, an admin
+page, Postgres for deployment, and shared market data fetched once for everyone.
+
+It **never places orders**. Locally it runs in dev mode (no login, one local user, `127.0.0.1`).
 *Personal analytics tool, not investment advice.*
 
 - Design, schema, formulas and assumptions: [PLAN.md](PLAN.md)
@@ -90,6 +94,44 @@ make migrate        # apply migrations now (backs up first)
    - Every refresh stores that day's snapshot.
 5. Open **Settings** to enter your target allocation, review the projection rates (they ship as
    placeholders), and fill in the emergency fund. Nothing there is assumed for you.
+
+## Accounts and isolation (Phase 6)
+
+- **Local development** (`AUTH_MODE=dev`, the default): no sign-in; you are `DEV_USER_EMAIL`
+  (default `owner@localhost`, an admin). An existing single-user database is upgraded in place
+  (migration 0008) and all its data becomes this user's.
+- **Production** (`AUTH_MODE=supabase`): sign-in by email magic link; only invited emails get in
+  (open sign-up is off in Supabase and the backend checks its own invite list). Deployment steps:
+  docs/DEPLOY.md (checkpoint 6b).
+- **What is shared:** market data (prices, NAVs, fundamentals, sector lists, news, macro) is
+  fetched once for the union of everyone's holdings. Each person sees prices and news only for
+  their own holdings.
+- **What is private:** everything a person uploads or enters (workbook rows, settings, journal,
+  notes, peers, disclosures, analyses, alerts). Every query is filtered to the signed-in user in
+  one place; tests attack every route as another user. Postgres Row Level Security is a second
+  layer.
+- **Admin page** (admins only): people, last activity, row counts (never figures), AI usage;
+  invite or remove; enable AI per person with a monthly cap; delete someone's data completely.
+- **Account page:** export my data (Excel), optional own AI key (stored encrypted), delete my
+  account and all data.
+- **New users** see a short getting-started guide with a downloadable blank Excel template.
+
+**AI for others:** off until the admin enables it per person. The app's key never leaves the
+server. Caps: each person's own cap, the admin's per-person cap (default 10/month) and a global
+monthly cap for the app's key (Settings › AI platform).
+
+**Moving your existing data into the hosted database** (one time, after 6b sets up Postgres):
+
+```bash
+cd backend
+TARGET_DATABASE_URL='<postgres url, see DEPLOY.md>' .venv/bin/python -m app.tools.sqlite_to_postgres \
+    --sqlite ../data/investments.db --owner-email you@example.com
+```
+
+The SQLite file is not modified. The tool migrates a copy, copies every table into the empty
+Postgres database under your account, and prints both sides' totals (value, invested, P&L,
+holdings, transactions, snapshots). It exits with an error unless they are identical, and refuses
+a target that already has accounts.
 
 ## Monthly routine (Excel is the only input)
 
@@ -159,6 +201,9 @@ make test           # backend pytest (calculations, importer, idempotency, XIRR,
                     # + frontend INR-formatting tests
 make lint           # eslint + tsc
 make check          # everything the pre-commit hook runs: backend tests, frontend tests, lint, typecheck
+make pg-up          # throwaway local Postgres in Docker (tests only)
+make test-postgres  # Postgres-only tests: RLS, advisory locks, cross-user attack, data move
+make test-all-postgres  # the whole backend suite on Postgres
 ```
 
 `make` runs recipes with `bash -euo pipefail`, so a failing step can never be hidden behind a

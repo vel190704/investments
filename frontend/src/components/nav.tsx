@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useMe } from "@/components/auth-gate";
+import { AUTH_MODE, PUBLIC_PATHS, signOut } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 const GROUPS = [
@@ -43,10 +45,17 @@ const GROUPS = [
     { href: "/sources", label: "Source health" },
     { href: "/settings", label: "Settings" },
   ] },
+  { title: "You", links: [
+    { href: "/account", label: "Account" },
+    { href: "/admin", label: "Admin", adminOnly: true },
+    { href: "/terms", label: "Terms & data" },
+  ] },
 ];
 
 export function Nav() {
   const path = usePathname();
+  const { me } = useMe();
+  if (PUBLIC_PATHS.includes(path) && path !== "/terms") return null;
   return (
     <nav aria-label="Main" className="flex gap-1 overflow-x-auto md:flex-col md:gap-4 md:overflow-visible">
       {GROUPS.map((g) => (
@@ -54,7 +63,7 @@ export function Nav() {
           <div className="hidden px-3 text-[11px] font-medium tracking-wide text-muted-foreground/70 uppercase md:block">
             {g.title}
           </div>
-          {g.links.map((l) => {
+          {g.links.filter((l) => !("adminOnly" in l && l.adminOnly) || me?.is_admin).map((l) => {
             const active = l.href === "/" ? path === "/" : path.startsWith(l.href);
             return (
               <Link
@@ -72,6 +81,16 @@ export function Nav() {
           })}
         </div>
       ))}
+      {me && (
+        <div className="flex gap-1 md:flex-col">
+          <div className="hidden truncate px-3 text-[11px] text-muted-foreground md:block" title={me.email}>{me.email}</div>
+          {AUTH_MODE === "supabase" && (
+            <button className="rounded-md px-3 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted" onClick={signOut}>
+              Sign out
+            </button>
+          )}
+        </div>
+      )}
     </nav>
   );
 }

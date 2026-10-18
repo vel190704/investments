@@ -7,7 +7,7 @@ import { Field, Select } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  apiDelete, errorText, useApi, type DisclosureItem, type InstrumentRef, type Lookthrough, type Overlap,
+  apiDelete, apiPost, errorText, useApi, type DisclosureItem, type InstrumentRef, type Lookthrough, type Overlap,
 } from "@/lib/api";
 import { formatDate, formatDateTime, formatINR, formatPct } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -88,9 +88,8 @@ function UploadForm({ funds, parsers, onDone }: {
     const fd = new FormData();
     fd.append("file", file);
     try {
-      const res = await fetch(`/api/disclosures?${q}`, { method: "POST", body: fd });
-      const body = await res.json();
-      if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const body = await apiPost<any>(`/disclosures?${q}`, fd);
       setMsg({ ok: true, text: `Stored ${body.rows} rows for ${body.fund} as of ${formatDate(body.as_of)} (${body.parser}${body.sheet ? `, sheet ${body.sheet}` : ""}); equity ${formatPct(body.equity_weight)} of NAV.` +
         (body.replaced_same_month ? " Replaced the earlier upload for that month." : "") +
         (body.warnings.length ? ` Warnings: ${body.warnings.join(" ")}` : "") });
