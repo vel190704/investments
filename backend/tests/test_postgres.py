@@ -133,3 +133,112 @@ def test_sqlite_to_postgres_tool_keeps_totals_identical(pg_url, tmp_path, workbo
     assert tool.main(["--sqlite", str(src), "--postgres", pg_url, "--owner-email", "me@example.com"]) == 0
     with pytest.raises(SystemExit, match="already has accounts"):  # never into a database that has accounts
         tool.copy_all(f"sqlite:///{src}", pg_url, "me@example.com")
+
+
+def _app_role_url(pg_url: str) -> tuple[str, str]:
+    """Create the production app role (backend/deploy/app_role.sql, unique name per run) on the test cluster."""
+    import uuid
+    from pathlib import Path
+
+    name, pw = f"inv_app_{uuid.uuid4().hex[:8]}", uuid.uuid4().hex
+    sql = (Path(__file__).parents[1] / "deploy" / "app_role.sql").read_text()
+    sql = "\n".join(l for l in sql.splitlines() if not l.startswith("--"))
+    sql = sql.replace("investments_app", name).replace(":'app_password'", f"'{pw}'")
+    admin = create_engine(pg_url, isolation_level="AUTOCOMMIT")
+    with admin.connect() as c:
+        for stmt in filter(str.strip, sql.split(";")):
+            c.execute(text(stmt))
+    admin.dispose()
+    return name, make_url(pg_url).set(username=name, password=pw).render_as_string(hide_password=False)
+
+
+def _drop_role(pg_url: str, name: str) -> None:
+    db.configure("sqlite://")
+    admin = create_engine(pg_url, isolation_level="AUTOCOMMIT")
+    with admin.connect() as c:
+        c.execute(text(f"DROP OWNED BY {name} CASCADE"))
+        c.execute(text(f"DROP ROLE {name}"))
+    admin.dispose()
+
+
+def _rls_attack(pg_url, tmp_path, monkeypatch, force_system: bool):
+    """The every-route attack with the APPLICATION-level user filter switched off, as the production role:
+    only Postgres RLS stands between Alice and Bob."""
+    from fastapi.testclient import TestClient
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+
+    from app import tenancy
+    from app.main import app
+    from tests import test_isolation as iso
+
+    role, url = _app_role_url(pg_url)
+    try:
+        db.configure(url)
+        with db.get_engine().connect() as c:  # really the production role, which cannot bypass RLS
+            assert c.execute(text("SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user")).scalar() is False
+        iso._offline(monkeypatch)
+        with TestClient(app) as c:  # migrations run as the role, as in production
+            a_book = iso.write_workbook(tmp_path / "alice.xlsx")
+            b_book = iso.write_workbook(tmp_path / "bob.xlsx", txn_rows=iso.bob_rows())
+            for who, book in ((iso.ALICE, a_book), (iso.BOB, b_book)):
+                r = c.post("/api/import", headers={"X-Dev-User": who}, files={"file": ("w.xlsx", book.read_bytes())})
+                assert r.status_code == 200 and r.json()["report"]["ok"], r.text
+            ids = iso._bob_objects(c, tmp_path, b_book)
+
+            # switch off the application-level isolation: no read filter, no cross-user write check
+            event.remove(Session, "do_orm_execute", tenancy._scope_to_user)
+            event.remove(Session, "before_flush", tenancy._stamp_owner)
+
+            def stamp_only(session, _ctx, _inst):  # new rows still get the requester's id; RLS WITH CHECK decides
+                uid = tenancy.current_user_id(session)
+                for obj in session.new:
+                    if isinstance(obj, tenancy.UserOwned) and obj.user_id is None and uid is not None:
+                        obj.user_id = uid
+
+            event.listen(Session, "before_flush", stamp_only)
+            if force_system:  # self-check: with the RLS context forced to "system", RLS no longer protects
+                monkeypatch.setattr(tenancy, "is_system", lambda s: True)
+            try:
+                problems, changed, covered = iso._attack(c, ids, a_book)
+            finally:
+                event.remove(Session, "before_flush", stamp_only)
+                event.listen(Session, "do_orm_execute", tenancy._scope_to_user)
+                event.listen(Session, "before_flush", tenancy._stamp_owner)
+        return problems, changed, covered
+    finally:
+        _drop_role(pg_url, role)
+
+
+def test_rls_alone_stops_the_cross_user_attack_as_the_production_role(pg_url, tmp_path, monkeypatch):
+    problems, changed, covered = _rls_attack(pg_url, tmp_path, monkeypatch, force_system=False)
+    leaks = [p for p in problems if "leaked" in p]
+    print(f"\\nRLS-only attack: {len(covered)} routes, {len(leaks)} leaks, other problems {len(problems) - len(leaks)}, "
+          f"Bob's tables changed: {sorted(changed)}")
+    assert leaks == [] and changed == {}
+    assert len(covered) > 80
+
+
+def test_rls_only_self_check_leaks_when_rls_is_not_in_force(pg_url, tmp_path, monkeypatch):
+    problems, changed, _ = _rls_attack(pg_url, tmp_path, monkeypatch, force_system=True)
+    leaks = [p for p in problems if "leaked" in p]
+    print(f"\\nself-check (RLS context forced to system): {len(leaks)} leaks, Bob's tables changed: {sorted(changed)}")
+    assert len(leaks) >= 10 and changed
+
+
+def test_startup_refuses_a_role_that_bypasses_rls(pg_url, monkeypatch):
+    from app.config import get_settings
+
+    db.configure(pg_url)  # the test cluster's superuser
+    monkeypatch.setattr(get_settings(), "env", "production")
+    with pytest.raises(db.UnsafeDatabaseRole, match="bypasses Row Level Security"):
+        db.check_rls_role()
+    monkeypatch.setattr(get_settings(), "env", "test")
+    assert db.check_rls_role()["superuser"] is True  # allowed only for local tests
+    role, url = _app_role_url(pg_url)
+    try:
+        db.configure(url)
+        monkeypatch.setattr(get_settings(), "env", "production")
+        assert db.check_rls_role() == {"role": role, "superuser": False, "bypassrls": False}
+    finally:
+        _drop_role(pg_url, role)

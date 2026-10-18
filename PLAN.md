@@ -1160,3 +1160,16 @@ terms page, feedback form, uptime (6c).
   filtered to the user's own securities/companies.
 - Data move: the user's real database (copied) moved into a Postgres account with identical totals; "before" was
   computed by the pre-6a code on the original schema.
+
+### 15.12 6a follow-ups (before 6b)
+1. **RLS as a real second layer.** Row Level Security does not apply to superusers or BYPASSRLS roles, and the earlier
+   Postgres attack ran as the container's superuser, so it tested only the application filter. Production and preview
+   now use one dedicated role (`backend/deploy/app_role.sql`: LOGIN, NOSUPERUSER, NOBYPASSRLS) that also runs the
+   migrations, so it owns the tables; FORCE RLS makes the per-user policies apply to it. The app refuses to start
+   outside development/test if its role can bypass RLS (`db.check_rls_role`, checked before migrating).
+   Test (`test_rls_alone_stops_the_cross_user_attack_as_the_production_role`): as that role, with the
+   application-level read filter and cross-user write check switched off, the every-route attack gives 94 routes,
+   0 leaks, 0 errors, Bob's rows unchanged. Self-check with the RLS context forced to "system": 35 leaks.
+2. **Canary test**: see `tests/test_canary.py`.
+3. **Fail closed**: sign-in required unless `DEV_AUTH=1` and `ENV=development|test`; unset or unknown ENV =
+   production (§15.3).

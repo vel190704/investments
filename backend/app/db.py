@@ -84,3 +84,27 @@ def session_scope(user_id: int | None = None, system: bool = False) -> Iterator[
         raise
     finally:
         session.close()
+
+
+class UnsafeDatabaseRole(RuntimeError):
+    pass
+
+
+def check_rls_role() -> dict | None:
+    """Postgres: the app's role must not bypass Row Level Security (superuser or BYPASSRLS), or RLS is not an active
+    second layer. Refuses outside development/test; returns the role's attributes (None on SQLite)."""
+    from sqlalchemy import text
+
+    from app.auth import DEV_ENVS, effective_env
+
+    engine = get_engine()
+    if engine.dialect.name != "postgresql":
+        return None
+    with engine.connect() as conn:
+        name, superuser, bypass = conn.execute(text(
+            "SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user")).one()
+    info = {"role": name, "superuser": superuser, "bypassrls": bypass}
+    if (superuser or bypass) and effective_env() not in DEV_ENVS:
+        raise UnsafeDatabaseRole(f"database role {name!r} bypasses Row Level Security (superuser={superuser}, "
+                                 f"bypassrls={bypass}); connect as the app role from backend/deploy/app_role.sql")
+    return info

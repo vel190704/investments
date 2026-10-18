@@ -55,7 +55,12 @@ async def lifespan(app: FastAPI):
     from app.auth import check_startup_config
     from app.jobs import first_snapshots, seed_all_sensitivities
 
-    check_startup_config()  # refuses dev auth in production
+    check_startup_config()  # refuses dev auth outside development/test
+    from app.db import check_rls_role
+
+    role = check_rls_role()  # before any migration: refuses (outside dev/test) a Postgres role that bypasses RLS
+    if role:
+        event(log, "database_role", **role)
     init_db()
     for name, fn in (("seed_sensitivities", seed_all_sensitivities), ("first_snapshots", first_snapshots)):
         try:
