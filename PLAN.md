@@ -1186,3 +1186,65 @@ terms page, feedback form, uptime (6c).
    (`app/resolve/bulk.py`). Assumption: these thresholds; ambiguous or lower-scoring proposals always need a person.
 5. **DEPLOY.md** gains SMTP for magic links, where `FIELD_ENCRYPTION_KEY` lives and what changing it does, and the
    rule that preview deployments never receive production database or Supabase credentials.
+
+## 16. Phase 6b design: deployment
+
+### 16.1 Where things run
+| part | where | why |
+|---|---|---|
+| Frontend (Next.js) | Vercel, root directory `frontend/` | native Next.js host; preview deployment per pull request |
+| Backend (FastAPI, Docker) | **Render** web service, Singapore, one instance | see below |
+| Database + Auth | Supabase, **Singapore** region, two projects (prod, preview) | same region as the backend |
+
+**Backend host: Render** (over Railway and Fly.io):
+- *Same region as the database matters most.* Pages run many small queries; a backend in another region than
+  Postgres adds ~50-100 ms per query. Render and Supabase both offer Singapore, which is also close to India.
+- *Push-to-deploy with "wait for CI".* Render's auto-deploy can be set to deploy only after the commit's GitHub
+  checks pass. It also offers a pre-deploy command (the release step `alembic upgrade head`), health-check gating
+  (a broken build is not promoted) and one-click rollback to an earlier deploy, all from the dashboard. That
+  makes for click-by-click docs without a CLI.
+- *Fly.io* has a Mumbai region and release commands, but it is CLI- and config-file-driven, and "wait for CI"
+  means deploying from GitHub Actions with a deploy token in GitHub. That is more moving parts for a
+  friends-and-family app.
+- *Railway* is comparable on features; Render's dashboard flow is simpler to document.
+- Trade-offs:
+  - Render's free instance sleeps after inactivity: cold starts, and the in-process scheduler doesn't run while
+    asleep. The always-on Starter instance is recommended.
+  - The pre-deploy command needs a paid instance. The app also migrates at start-up, so the free tier still works.
+
+### 16.2 Backend hardening for the internet
+- Docker image: Python slim, non-root user, `HEALTHCHECK` on `/api/health`, configuration from environment only.
+- Start: `alembic upgrade head` as the release step (Render pre-deploy command), then uvicorn with proxy headers.
+- `/api/health`: unauthenticated, checks the database with `SELECT 1`, returns 503 when it is down, reveals nothing
+  else.
+- CORS: only `CORS_ORIGINS` (the Vercel production URL and, on the preview service, the preview URLs); no
+  wildcard with credentials.
+- Security headers on every response: nosniff, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a
+  restrictive CSP for the API, HSTS outside development, and `Cache-Control: no-store` for API data.
+- Request size limit: bodies above `MAX_REQUEST_BYTES` (default 10 MB) get 413 before being read (uploads also
+  keep their per-route checks).
+- Rate limiting (in-process, per instance; fine for one instance):
+  - unauthenticated requests per IP: blunts token guessing; sign-in itself is rate-limited by Supabase;
+  - uploads and imports per user;
+  - AI connection tests and admin invites per user.
+  - 429 responses carry `Retry-After`.
+- One instance. Jobs are safe with more (advisory locks), but the live-price viewer signal and the rate limiter
+  live in process memory.
+
+### 16.3 Frontend
+`NEXT_PUBLIC_API_URL` points the browser at the backend (CORS); the `/api` rewrite is used only in local dev. Only
+public values are in client code (Supabase URL and publishable key). Security headers come from `next.config.ts`.
+
+### 16.4 CI and environments
+- GitHub Actions runs `make check` and the Postgres tests (a Postgres service container) on every push and pull
+  request.
+- Branch protection on `main` requires those checks.
+- Render auto-deploys `main` after checks pass. Vercel builds every push; production promotion only happens from
+  `main`.
+- Preview: Vercel preview deployments point at a preview backend service and the preview Supabase project, never
+  production (docs/DEPLOY.md §1).
+
+### 16.5 Assumptions (6b)
+1. Region: Singapore for both Render and Supabase. Mumbai would be closer to users, but Render has no Mumbai region.
+2. Render Starter (always on) for production. The preview backend may use the free instance (sleeps).
+3. Rate-limit numbers are starting points (in `app/api/limits.py`), sized for 5-15 people.
