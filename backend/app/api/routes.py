@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app import repository as repo
 from app.calc.simulator import PRESET_AMOUNTS_RUPEES, ASSUMPTIONS, default_scenarios, instrument_scenario, simulate
-from app.db import get_session
+from app.auth import CurrentUser, current_user, get_admin_session, get_session, require_admin
 from app.importer.run import format_report, import_workbook
 from app.market.service import refresh_prices
 from app.money import rupees_to_paise
@@ -59,20 +59,20 @@ async def upload(file: UploadFile = File(...), resolve: bool = True, session: Se
     return {"report": report, "text": format_report(report), "resolution": resolution}
 
 
-def _preview_dir() -> Path:
-    from app.config import get_settings
-
-    d = get_settings().cache_dir / "import-preview"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+PREVIEW_TTL_HOURS = 24
 
 
 @router.post("/import/preview")
 async def import_preview(file: UploadFile = File(...), session: Session = Depends(get_session)):
-    """Dry run. The file is kept under its sha256 so Confirm applies exactly what was previewed."""
+    """Dry run. The file is kept (per user, in the DB) under its sha256 so Confirm applies exactly what was previewed."""
     import hashlib
+    from datetime import timedelta
+
+    from sqlalchemy import delete as sa_delete, select as sa_select
 
     from app.importer.run import preview_workbook
+    from app.models import ImportPreview
+    from app.timeutil import utcnow
 
     if not (file.filename or "").lower().endswith(".xlsx"):
         raise HTTPException(400, "Please upload an .xlsx workbook")
@@ -80,11 +80,14 @@ async def import_preview(file: UploadFile = File(...), session: Session = Depend
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "File too large")
     token = hashlib.sha256(data).hexdigest()
-    path = _preview_dir() / f"{token}.xlsx"
-    path.write_bytes(data)
     name = Path(file.filename).name
-    (_preview_dir() / f"{token}.name").write_text(name)
-    report = preview_workbook(session, path, file_name=name)
+    session.execute(sa_delete(ImportPreview).where(ImportPreview.created_at < utcnow() - timedelta(hours=PREVIEW_TTL_HOURS)))
+    if session.scalar(sa_select(ImportPreview).where(ImportPreview.token == token)) is None:
+        session.add(ImportPreview(token=token, file_name=name, content=data))
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "preview.xlsx"
+        path.write_bytes(data)
+        report = preview_workbook(session, path, file_name=name)
     return {"token": token, "file_name": name, "report": report, "text": format_report(report)}
 
 
@@ -97,16 +100,22 @@ def import_confirm(body: ConfirmIn, session: Session = Depends(get_session)):
     import hashlib
     import re as _re
 
+    from sqlalchemy import select as sa_select
+
+    from app.models import ImportPreview
+
     if not _re.fullmatch(r"[0-9a-f]{64}", body.token):
         raise HTTPException(422, "invalid token")
-    path = _preview_dir() / f"{body.token}.xlsx"
-    if not path.exists():
+    pv = session.scalar(sa_select(ImportPreview).where(ImportPreview.token == body.token))
+    if pv is None:
         raise HTTPException(404, "Preview expired or not found; upload the file again")
-    if hashlib.sha256(path.read_bytes()).hexdigest() != body.token:
+    if hashlib.sha256(pv.content).hexdigest() != body.token:
         raise HTTPException(409, "The previewed file changed; upload it again")
-    name_file = _preview_dir() / f"{body.token}.name"
-    name = name_file.read_text() if name_file.exists() else path.name
-    report = import_workbook(session, path, file_name=name)
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "confirm.xlsx"
+        path.write_bytes(pv.content)
+        report = import_workbook(session, path, file_name=pv.file_name)
+    session.delete(pv)
     session.commit()
     resolution = None
     if report["ok"]:
@@ -122,8 +131,6 @@ def import_confirm(body: ConfirmIn, session: Session = Depends(get_session)):
             session.commit()
         except Exception:
             session.rollback()
-    path.unlink(missing_ok=True)
-    name_file.unlink(missing_ok=True)
     return {"report": report, "text": format_report(report), "resolution": resolution}
 
 
@@ -187,9 +194,15 @@ def market_refresh(session: Session = Depends(get_session)):
 @router.get("/market/status")
 def market_status(session: Session = Depends(get_session)):
     runs = repo.refresh_runs(session, 5)
-    return [{"id": r.id, "trigger": r.trigger, "started_at": as_utc(r.started_at).isoformat(),
-             "finished_at": as_utc(r.finished_at).isoformat() if r.finished_at else None,
-             "ok_count": r.ok_count, "error_count": r.error_count, "results": r.results} for r in runs]
+    mine = set(repo.instrument_security_map(session))  # refresh runs are global: show only this user's securities
+    out = []
+    for r in runs:
+        results = [x for x in r.results if x.get("security_id") in mine]
+        out.append({"id": r.id, "trigger": r.trigger, "started_at": as_utc(r.started_at).isoformat(),
+                    "finished_at": as_utc(r.finished_at).isoformat() if r.finished_at else None,
+                    "ok_count": sum(1 for x in results if x.get("ok")),
+                    "error_count": sum(1 for x in results if not x.get("ok")), "results": results})
+    return out
 
 
 # ---------------- portfolio
@@ -388,8 +401,12 @@ def get_settings_all(session: Session = Depends(get_session)):
 
 
 @router.put("/settings/{section}")
-def put_setting(section: str, value: dict, session: Session = Depends(get_session)):
-    from app.services.settings import SettingsError, put
+def put_setting(section: str, value: dict, session: Session = Depends(get_session),
+                user: CurrentUser = Depends(current_user)):
+    from app.services.settings import PLATFORM_SECTIONS, SettingsError, put
+
+    if section in PLATFORM_SECTIONS and not user.is_admin:
+        raise HTTPException(403, "platform settings can be changed by the admin only")
 
     try:
         return {"section": section, "value": put(session, section, value)}
@@ -398,8 +415,11 @@ def put_setting(section: str, value: dict, session: Session = Depends(get_sessio
 
 
 @router.delete("/settings/{section}")
-def reset_setting(section: str, session: Session = Depends(get_session)):
-    from app.services.settings import SettingsError, reset
+def reset_setting(section: str, session: Session = Depends(get_session), user: CurrentUser = Depends(current_user)):
+    from app.services.settings import PLATFORM_SECTIONS, SettingsError, reset
+
+    if section in PLATFORM_SECTIONS and not user.is_admin:
+        raise HTTPException(403, "platform settings can be changed by the admin only")
 
     try:
         reset(session, section)
@@ -704,7 +724,7 @@ class MacroIn(BaseModel):
 
 
 @router.put("/macro/{key}")
-def macro_manual(key: str, body: MacroIn, session: Session = Depends(get_session)):
+def macro_manual(key: str, body: MacroIn, session: Session = Depends(get_session), _admin: CurrentUser = Depends(require_admin)):
     from datetime import date as _date
 
     from app.services.macro import MacroError, set_manual
@@ -723,7 +743,7 @@ def macro_manual(key: str, body: MacroIn, session: Session = Depends(get_session
 
 
 @router.delete("/macro/{key}")
-def macro_delete(key: str, session: Session = Depends(get_session)):
+def macro_delete(key: str, session: Session = Depends(get_session), _admin: CurrentUser = Depends(require_admin)):
     from app.services.macro import delete_manual
 
     delete_manual(session, key)
@@ -750,7 +770,10 @@ def put_sensitivity(sector: str, body: TagsIn, session: Session = Depends(get_se
 def live(session: Session = Depends(get_session)):
     from app.services.live import live_view, mark_viewer
 
-    mark_viewer()  # the scheduler polls only while someone is looking
+    from app.services import settings as st
+
+    if st.get(session, "live")["enabled"]:
+        mark_viewer()  # the shared poller runs only while someone with live prices on is looking
     return live_view(session)
 
 
@@ -1062,3 +1085,129 @@ def source_health_view(session: Session = Depends(get_session)):
     from app.services.source_health import summary
 
     return {"sources": summary(session), "note": "Last 30 days, one cell per day: ok / failed / mixed / none."}
+
+
+# ---------------- Phase 6: account (self-service), onboarding, admin
+@router.get("/me")
+def me(user: CurrentUser = Depends(current_user), session: Session = Depends(get_session)):
+    from sqlalchemy import func as sa_func, select as sa_select
+
+    from app.models import Transaction
+    from app.services.analysis import usage
+
+    has_data = (session.scalar(sa_select(sa_func.count()).select_from(Transaction)) or 0) > 0
+    return {"id": user.id, "email": user.email, "role": user.role, "is_admin": user.is_admin,
+            "has_data": has_data, "ai": usage(session)}
+
+
+@router.get("/onboarding/template.xlsx")
+def onboarding_template(_user: CurrentUser = Depends(current_user)):
+    from app.services.template import build_template
+
+    return Response(build_template(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="investment_tracker_template.xlsx"'})
+
+
+class DeleteMeIn(BaseModel):
+    confirm: str
+
+
+@router.delete("/me")
+def delete_me(body: DeleteMeIn, user: CurrentUser = Depends(current_user)):
+    """Delete my account and all my data. The body must repeat my email (typed confirmation)."""
+    from app.db import session_scope
+    from app.services.accounts import delete_user_data
+
+    if body.confirm.strip().lower() != user.email.lower():
+        raise HTTPException(422, "type your email exactly to confirm")
+    with session_scope(system=True) as s:
+        return delete_user_data(s, user.id, remove_account=True)
+
+
+class OwnKeyIn(BaseModel):
+    key: str | None = None
+
+
+@router.put("/me/ai-key")
+def put_own_key(body: OwnKeyIn, user: CurrentUser = Depends(current_user)):
+    from app.crypto import CryptoUnavailable
+    from app.db import session_scope
+    from app.services.accounts import AccountError, set_own_key
+
+    try:
+        with session_scope(system=True) as s:
+            return set_own_key(s, user.id, body.key)
+    except (AccountError, CryptoUnavailable) as e:
+        raise HTTPException(422, str(e)) from None
+
+
+@router.get("/admin/users")
+def admin_users(session: Session = Depends(get_admin_session)):
+    from app.services.accounts import list_users
+    from app.services.analysis import global_calls_this_month
+    from app.services import settings as st
+
+    return {"users": list_users(session),
+            "global_ai": {"calls_this_month": global_calls_this_month(),
+                          "cap": st.get(session, "llm_platform")["global_monthly_cap"]}}
+
+
+class InviteIn(BaseModel):
+    email: str
+    send_email: bool = True
+
+
+@router.post("/admin/invites", status_code=201)
+def admin_invite(body: InviteIn, session: Session = Depends(get_admin_session)):
+    from app.services.accounts import AccountError, invite
+
+    try:
+        return invite(session, body.email, session.info["admin_user_id"], body.send_email)
+    except AccountError as e:
+        raise HTTPException(422, str(e)) from None
+
+
+@router.delete("/admin/invites/{email}")
+def admin_uninvite(email: str, session: Session = Depends(get_admin_session)):
+    from app.services.accounts import uninvite
+
+    uninvite(session, email, session.info["admin_user_id"])
+    return {"removed": True}
+
+
+class UserAiIn(BaseModel):
+    ai_enabled: bool
+    ai_monthly_cap: int | None = None
+
+
+@router.put("/admin/users/{user_id:int}/ai")
+def admin_user_ai(user_id: int, body: UserAiIn, session: Session = Depends(get_admin_session)):
+    from app.services.accounts import AccountError, set_ai
+
+    try:
+        return set_ai(session, user_id, body.ai_enabled, body.ai_monthly_cap)
+    except AccountError as e:
+        raise HTTPException(404, str(e)) from None
+
+
+class AdminDeleteIn(BaseModel):
+    confirm: str
+    remove_account: bool = True
+
+
+@router.delete("/admin/users/{user_id:int}")
+def admin_delete_user(user_id: int, body: AdminDeleteIn, session: Session = Depends(get_admin_session)):
+    from app.models import User
+    from app.services.accounts import AccountError, delete_user_data
+
+    u = session.get(User, user_id)
+    if u is None:
+        raise HTTPException(404, "no such user")
+    if u.id == session.info["admin_user_id"]:
+        raise HTTPException(422, "use Account › Delete my account for yourself")
+    if body.confirm.strip().lower() != u.email.lower():
+        raise HTTPException(422, "type the user's email exactly to confirm")
+    try:
+        return delete_user_data(session, user_id, remove_account=body.remove_account)
+    except AccountError as e:
+        raise HTTPException(404, str(e)) from None

@@ -124,7 +124,8 @@ def enable(session, monkeypatch, cap=30):
 
     monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-test")
     st.put(session, "llm", {**st.get(session, "llm"), "outbound_enabled": True, "monthly_call_cap": cap,
-                            "model": "claude-opus-5-5", "price_in_per_mtok": "4", "price_out_per_mtok": "20"})
+                            "model": "claude-opus-5-5"})
+    st.put(session, "llm_platform", {"global_monthly_cap": 200, "price_in_per_mtok": "4", "price_out_per_mtok": "20"})
 
 
 def good_for(inp):
@@ -172,8 +173,8 @@ def test_privacy_toggle_blocks_all_calls(session, workbook, monkeypatch):
 def test_no_key_disables_feature(session, workbook):
     lt = setup_book(session, workbook)
     st.put(session, "llm", {**st.get(session, "llm"), "outbound_enabled": True})
-    assert "No ANTHROPIC_API_KEY" in an.gate(session)
-    assert an.cards(session)["gate"].startswith("No ANTHROPIC_API_KEY")  # page still works
+    assert "No AI key configured on the server" in an.gate(session)
+    assert an.cards(session)["gate"].startswith("No AI key configured")  # page still works
 
 
 def test_cache_by_input_hash(session, workbook, monkeypatch):
@@ -246,7 +247,7 @@ def test_prices_not_hardcoded_and_model_from_env(session, monkeypatch):
     from app.config import get_settings
 
     u = an.usage(session)
-    assert u["estimated_cost_usd"] is None and "Set input/output prices" in u["pricing_note"]
+    assert u["estimated_cost_usd"] is None and "Token prices are not set" in u["pricing_note"]
     assert "Verify against the provider's pricing page" in u["pricing_note"]
     monkeypatch.setattr(get_settings(), "claude_model", "claude-sonnet-5")
     assert st.llm_model(session) == "claude-sonnet-5"

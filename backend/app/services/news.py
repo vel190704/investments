@@ -106,7 +106,7 @@ def _store(s: Session, t: Tracked, item: src.RawItem, report: dict) -> None:
     if nc.is_near_duplicate(item.title, item.published_at, recent):
         report["duplicates"] += 1
         return
-    s.add(NewsItem(isin=t.isin, instrument_id=t.instrument_id, company=t.name, title=item.title, source=item.source,
+    s.add(NewsItem(isin=t.isin, company=t.name, title=item.title, source=item.source,
                    source_kind=item.source_kind, url=item.url, published_at=item.published_at,
                    category=nc.categorize(item.title, item.summary), category_origin="RULE", summary=item.summary,
                    dedupe_key=nc.dedupe_key(item.title)))
@@ -114,10 +114,35 @@ def _store(s: Session, t: Tracked, item: src.RawItem, report: dict) -> None:
     report["added"] += 1
 
 
+def tracked_union() -> list[Tracked]:
+    """Companies tracked by any user (news is fetched once and shared; each user sees only their own companies)."""
+    from sqlalchemy import select as _select
+
+    from app.db import session_scope
+    from app.models import User
+
+    with session_scope(system=True) as sys_s:
+        user_ids = list(sys_s.scalars(_select(User.id)))
+    merged: dict[str, Tracked] = {}
+    for uid in user_ids:
+        with session_scope(user_id=uid) as us:
+            for t in tracked_companies(us)[0]:
+                cur = merged.get(t.isin)
+                if cur is None or t.exposure > cur.exposure:
+                    merged[t.isin] = Tracked(t.isin, t.name, t.symbol, None, t.exposure)
+    return list(merged.values())
+
+
 def refresh_news(s: Session, client: PoliteClient | None = None, now: datetime | None = None) -> dict:
+    """In a user session: that user's companies. In a system session (the daily job): every user's, once."""
+    from app.tenancy import is_system
+
     client = client or default_client()
     now = now or utcnow()
-    tracked, untracked, _ = tracked_companies(s)
+    if is_system(s):
+        tracked, untracked = tracked_union(), []
+    else:
+        tracked, untracked, _ = tracked_companies(s)
     report = {"tracked": len(tracked), "added": 0, "duplicates": 0, "already_stored": 0, "pruned": 0,
               "sources": {}, "untracked": untracked}
     cutoff = now - timedelta(days=RETENTION_DAYS)
@@ -189,7 +214,8 @@ def refresh_news(s: Session, client: PoliteClient | None = None, now: datetime |
 
 def _item_dict(n: NewsItem, t: Tracked | None) -> dict:
     p = as_utc(n.published_at)
-    return {"id": n.id, "isin": n.isin, "company": n.company, "instrument_id": n.instrument_id, "title": n.title,
+    return {"id": n.id, "isin": n.isin, "company": n.company, "instrument_id": t.instrument_id if t else None,
+            "title": n.title,
             "source": n.source, "source_kind": n.source_kind, "url": n.url, "published_at": p.isoformat(),
             "published_ts": p.timestamp(), "fetched_at": as_utc(n.fetched_at).isoformat(), "category": n.category,
             "category_origin": n.category_origin, "summary": n.summary,
@@ -201,7 +227,9 @@ def feed(s: Session, isin: str | None = None, category: str | None = None, days:
     now = now or utcnow()
     tracked, untracked, fund_notes = tracked_companies(s)
     by_isin = {t.isin: t for t in tracked}
-    q = select(NewsItem).where(NewsItem.published_at >= now - timedelta(days=days))
+    # news is shared: show only items about this user's tracked companies
+    q = select(NewsItem).where(NewsItem.published_at >= now - timedelta(days=days),
+                               NewsItem.isin.in_(list(by_isin) or ["-"]))
     if isin:
         q = q.where(NewsItem.isin == isin)
     if category:
@@ -215,7 +243,7 @@ def feed(s: Session, isin: str | None = None, category: str | None = None, days:
                                                         "checked_at": as_utc(row.checked_at).isoformat(),
                                                         "items_fetched": row.items_fetched,
                                                         "items_matched": row.items_matched})
-        elif not row.ok:
+        elif not row.ok and row.isin in by_isin:
             statuses.setdefault(row.isin, []).append({"source": row.source, "message": row.message})
     return {
         "items": items,

@@ -5,6 +5,7 @@ import openpyxl
 import pytest
 from sqlalchemy import func, select
 
+from tests.conftest import make_user
 from app.calc.positions import TxnInput, replay
 from app.importer.run import import_workbook
 from app.models import ChangeLogEntry, Instrument, Transaction
@@ -142,7 +143,7 @@ def test_export_imports_into_empty_db_with_identical_positions(session, workbook
 
     db.configure(f"sqlite:///{tmp_path / 'fresh.db'}")
     db.init_db()
-    with db.session_scope() as s2:
+    with db.session_scope(user_id=make_user()) as s2:
         rep = import_workbook(s2, path)
         assert rep["ok"] and rep["transactions"]["loaded"] == 20
         assert positions(s2) == expected

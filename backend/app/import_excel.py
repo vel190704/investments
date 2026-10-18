@@ -16,10 +16,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-resolve", action="store_true",
                     help="skip ISIN / AMFI scheme-code matching (no network)")
     ap.add_argument("--dry-run", action="store_true", help="show what would change; save nothing")
+    ap.add_argument("--user", help="import into this user's account (email; default: DEV_USER_EMAIL, the local user)")
     args = ap.parse_args(argv)
     init_db()
+    from app.auth import resolve_user
+    from app.config import get_settings
+
+    uid = resolve_user(args.user or get_settings().dev_user_email, None, dev=True).id
     if args.dry_run:
-        with session_scope() as s:
+        with session_scope(user_id=uid) as s:
             report = preview_workbook(s, args.path)
         print("DRY RUN — nothing was saved\n" + format_report(report))
         tr = report["transactions"]
@@ -29,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {r['date']} {r['type']} {r['name']} qty {r['quantity']} (excel row {r['source_row']})")
         return 0 if report["ok"] else 1
     try:
-        with session_scope() as s:
+        with session_scope(user_id=uid) as s:
             report = import_workbook(s, args.path)
     except FileNotFoundError:
         print(f"File not found: {args.path}", file=sys.stderr)
@@ -39,13 +44,13 @@ def main(argv: list[str] | None = None) -> int:
         from app.resolve.service import resolve_identifiers
 
         try:
-            with session_scope() as s:
+            with session_scope(user_id=uid) as s:
                 res = resolve_identifiers(s)
             print(f"\nIdentifier matching: {res['summary']}")
             print("Review and confirm the proposed matches on the Mappings page (/mappings).")
             from app.services.classification import refresh_classification
 
-            with session_scope() as s:
+            with session_scope(user_id=uid) as s:
                 print(f"Classification: {refresh_classification(s)['summary']}")
         except Exception as e:  # network problems must not fail the import
             print(f"\nIdentifier matching skipped: {e}")

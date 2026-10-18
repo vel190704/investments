@@ -22,6 +22,7 @@ from pathlib import Path
 from app.timeutil import IST
 
 REQUEST_ID: ContextVar[str] = ContextVar("request_id", default="-")
+USER_ID: ContextVar[str] = ContextVar("user_id", default="-")  # internal numeric id; emails are never logged
 MAX_BYTES = 10 * 1024 * 1024
 BACKUPS = 5
 _HANDLER_TAG = "_investments_handler"
@@ -70,7 +71,8 @@ class _Base(logging.Formatter):
 class KeyValueFormatter(_Base):
     def _format(self, record: logging.LogRecord) -> str:
         parts = [_ts(record), f"level={record.levelname}", f"logger={record.name}",
-                 f"rid={getattr(record, 'request_id', REQUEST_ID.get())}", f"msg={_kv_value(record.getMessage())}"]
+                 f"rid={getattr(record, 'request_id', REQUEST_ID.get())}",
+                 f"uid={getattr(record, 'user_id', USER_ID.get())}", f"msg={_kv_value(record.getMessage())}"]
         for k, v in (getattr(record, "fields", None) or {}).items():
             parts.append(f"{k}={_kv_value(v)}")
         line = " ".join(parts)
@@ -82,7 +84,8 @@ class KeyValueFormatter(_Base):
 class JsonFormatter(_Base):
     def _format(self, record: logging.LogRecord) -> str:
         obj = {"ts": _ts(record), "level": record.levelname, "logger": record.name,
-               "rid": getattr(record, "request_id", REQUEST_ID.get()), "msg": record.getMessage(),
+               "rid": getattr(record, "request_id", REQUEST_ID.get()),
+               "uid": getattr(record, "user_id", USER_ID.get()), "msg": record.getMessage(),
                **(getattr(record, "fields", None) or {})}
         if record.exc_info:
             obj["exc"] = self.formatException(record.exc_info)
@@ -92,6 +95,8 @@ class JsonFormatter(_Base):
 class _ContextFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.request_id = REQUEST_ID.get()
+        if not hasattr(record, "user_id"):
+            record.user_id = USER_ID.get()
         return True
 
 

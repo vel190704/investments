@@ -22,20 +22,26 @@ def _startup_refresh() -> None:
 
     from app.market.service import refresh_if_stale
     from app.models import Instrument
-    from app.services.catchup import catch_up
     from app.timeutil import today_ist
 
+    from app.jobs import catch_up_global, job_lock
+
     try:
-        with session_scope() as s:
-            if not s.scalar(select(func.count()).select_from(Instrument)):
+        with job_lock("startup_refresh") as mine:
+            if not mine:
+                event(log, "startup_refresh", skipped="another instance is running it")
                 return
-            res = catch_up(s, today_ist())
+            with session_scope(system=True) as s:
+                if not s.scalar(select(func.count()).select_from(Instrument)):
+                    return
+            res = catch_up_global(today_ist())
             if res["ran"]:
                 r = res["refresh"] or {}
                 event(log, "startup_catchup", gaps=len(res["gaps_recorded"]), gap_dates=res["gaps_recorded"],
                       refresh_ok=r.get("ok_count"), refresh_errors=r.get("error_count"))
                 return
-            res = refresh_if_stale(s, get_settings().startup_refresh_max_age_hours)
+            with session_scope(system=True) as s:
+                res = refresh_if_stale(s, get_settings().startup_refresh_max_age_hours)
         if res:
             event(log, "startup_refresh", refresh_ok=res["ok_count"], refresh_errors=res["error_count"])
         else:
@@ -44,35 +50,19 @@ def _startup_refresh() -> None:
         event(log, "startup_refresh", logging.ERROR, exc_info=True, outcome="failed")
 
 
-def ensure_first_snapshot() -> dict | None:
-    """Phase 2: if no snapshot exists yet, store one immediately from cached prices."""
-    from sqlalchemy import func, select
-
-    from app.models import PortfolioSnapshot
-    from app.services.snapshots import take_snapshot
-
-    with session_scope() as s:
-        if s.scalar(select(func.count()).select_from(PortfolioSnapshot)):
-            return None
-        return take_snapshot(s, trigger="startup")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
-    try:
-        from app.services.macro import seed_starter_sensitivities
+    from app.auth import check_startup_config
+    from app.jobs import first_snapshots, seed_all_sensitivities
 
-        with session_scope() as s:
-            seed_starter_sensitivities(s)
-    except Exception:
-        log.exception("Seeding starter sensitivity tags failed")
-    try:
-        first = ensure_first_snapshot()
-        if first:
-            log.info("Stored first snapshot for %s", first["snapshot_date"])
-    except Exception:
-        log.exception("First snapshot failed")
+    check_startup_config()  # refuses dev auth in production
+    init_db()
+    for name, fn in (("seed_sensitivities", seed_all_sensitivities), ("first_snapshots", first_snapshots)):
+        try:
+            res = fn()
+            event(log, name, **res)
+        except Exception:
+            event(log, name, logging.ERROR, exc_info=True, outcome="failed")
     sched = None
     if get_settings().scheduler_enabled:
         from app.scheduler import start_scheduler

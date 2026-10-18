@@ -21,6 +21,8 @@ def missed_dates(last: date | None, today: date) -> list[date]:
 
 
 def catch_up(s: Session, today: date, refresh=None) -> dict:
+    """In a user session: that user's last snapshot. In a system session (start-up): the latest snapshot of any
+    user; the caller then snapshots every user (jobs.catch_up_global). Gaps are global: the app was down for all."""
     from app.market.service import refresh_prices
 
     last = s.scalar(select(func.max(PortfolioSnapshot.snapshot_date)))

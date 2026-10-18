@@ -76,8 +76,10 @@ def test_refresh_assigns_nse_sectors_and_etf_regions(session, workbook, monkeypa
     assert secs[mos.id].sector == "Unclassified"
     hk = session.scalar(select(Instrument).where(Instrument.symbol == "HNGSNGBEES"))
     assert hk.region == "Hong Kong/China" and secs[hk.id].sector == "International equity — Hong Kong/China"
-    a = session.scalar(select(SectorAssignment).where(SectorAssignment.instrument_id == lt.id))
-    assert a.note == "matched by ISIN" and a.as_of == date(2026, 10, 3)
+    from app.models import SecuritySector
+
+    a = session.get(SecuritySector, lt.security_id)  # NSE sectors are shared per security (Phase 6)
+    assert a.note == "matched by NSE symbol" and a.as_of == date(2026, 10, 3)
 
 
 def test_manual_override_wins_and_can_be_cleared(session, workbook, monkeypatch):

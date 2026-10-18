@@ -23,7 +23,7 @@ class AmfiNavProvider:
         todo = []
         for r in refs:
             if not r.scheme_code:
-                out[r.instrument_id] = FetchError("scheme code not confirmed yet (see Mappings)")
+                out[r.security_id] = FetchError("scheme code not confirmed yet (see Mappings)")
             else:
                 todo.append(r)
         if not todo:
@@ -31,12 +31,12 @@ class AmfiNavProvider:
         try:
             schemes, _ = self._loader(max_age_hours=1)
         except Exception as e:
-            return {**out, **{r.instrument_id: FetchError(f"AMFI download failed: {e}") for r in todo}}
+            return {**out, **{r.security_id: FetchError(f"AMFI download failed: {e}") for r in todo}}
         for r in todo:
             s = schemes.get(r.scheme_code)
             if s is None or s.nav is None or s.nav_date is None:
-                out[r.instrument_id] = FetchError(f"scheme {r.scheme_code} has no NAV in NAVAll.txt")
+                out[r.security_id] = FetchError(f"scheme {r.scheme_code} has no NAV in NAVAll.txt")
             else:
-                out[r.instrument_id] = Quote(price=s.nav, price_date=s.nav_date, source=SOURCE,
+                out[r.security_id] = Quote(price=s.nav, price_date=s.nav_date, source=SOURCE,
                                              source_ref=r.scheme_code, fetched_at=utcnow())
         return out

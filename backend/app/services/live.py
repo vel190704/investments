@@ -40,7 +40,7 @@ class PollerState:
     consecutive_failures: int = 0
     last_viewer_mono: float | None = None
     last_cycle: dict | None = None
-    errors: dict[int, str] = field(default_factory=dict)  # instrument_id -> last poll error
+    errors: dict[int, str] = field(default_factory=dict)  # security_id -> last poll error
 
 
 STATE = PollerState()
@@ -53,6 +53,22 @@ def mark_viewer(mono: float | None = None) -> None:
 
 def _holidays(s: Session):
     return holidays_from_setting(st.get(s, "market_holidays"))
+
+
+def _poll_seconds(s: Session) -> int:
+    return st.get(s, "live_platform")["poll_seconds"]
+
+
+def _polled_securities(s: Session):
+    """Stocks/ETFs held by the session's user, or by anyone in a system session (the shared poller)."""
+    from sqlalchemy import select
+
+    from app.models import Security
+    from app.services.securities import held_security_ids
+
+    ids = held_security_ids(s)
+    return list(s.scalars(select(Security).where(Security.id.in_(ids), Security.kind.in_(("STOCK", "ETF")),
+                                                 Security.symbol.is_not(None)))) if ids else []
 
 
 def _stock_rows(s: Session):
@@ -75,10 +91,10 @@ def poll_cycle(s: Session, now: datetime | None = None, manual: bool = False, fe
         if manual and STATE.last_poll_mono is not None and mono - STATE.last_poll_mono < POLL_MIN:
             return {"ran": False, "reason": f"rate limited: at most one refresh every {POLL_MIN}s",
                     "last_cycle": STATE.last_cycle}
-        rows = _stock_rows(s)
-        if not rows:
+        secs = _polled_securities(s)
+        if not secs:
             return {"ran": False, "reason": "no stocks or ETFs held"}
-        by_symbol = {r.inst.symbol: r.inst.id for r in rows}
+        by_symbol = {x.symbol: x.id for x in secs}
         t0 = time.perf_counter()
         STATE.last_poll_mono = mono
         try:
@@ -88,22 +104,24 @@ def poll_cycle(s: Session, now: datetime | None = None, manual: bool = False, fe
         fetched_at = utcnow()
         ticks, ok, failed = [], [], {}
         for sym, res in data.items():
-            iid = by_symbol[sym]
+            sid = by_symbol[sym]
             if isinstance(res, str):
-                failed[iid] = res
+                failed[sid] = res
                 continue
-            ok.append(iid)
-            ticks += [{"instrument_id": iid, "ts": ts, "price": price, "source": provider.SOURCE,
+            ok.append(sid)
+            ticks += [{"security_id": sid, "ts": ts, "price": price, "source": provider.SOURCE,
                        "fetched_at": fetched_at} for ts, price in res]
         added = repo.add_ticks(s, ticks)
         pruned = repo.prune_ticks(s, now - timedelta(days=RETENTION_DAYS))
         s.flush()
-        STATE.errors = failed
+        STATE.errors = {**STATE.errors, **failed}
+        for sid in ok:
+            STATE.errors.pop(sid, None)
         STATE.consecutive_failures = 0 if ok else STATE.consecutive_failures + 1
         cycle = {"ran": True, "at": now.isoformat(), "manual": manual, "market_open": market.open,
                  "requested": len(by_symbol), "succeeded": len(ok), "failed": len(failed), "ticks_added": added,
                  "pruned": pruned, "duration_ms": round((time.perf_counter() - t0) * 1000),
-                 "next_interval_s": poll_interval(st.get(s, "live")["poll_seconds"], STATE.consecutive_failures)}
+                 "next_interval_s": poll_interval(_poll_seconds(s), STATE.consecutive_failures)}
         STATE.last_cycle = cycle
     from app.services.source_health import record
 
@@ -117,10 +135,9 @@ def poll_cycle(s: Session, now: datetime | None = None, manual: bool = False, fe
 
 
 def scheduler_tick(s: Session, now: datetime | None = None, mono: float | None = None, fetch=None) -> dict:
-    """Called every few seconds by the scheduler; polls only when enabled, open, watched and due."""
-    cfg = st.get(s, "live")
-    if not cfg["enabled"]:
-        return {"ran": False, "reason": "live prices are off (Settings)"}
+    """Called every few seconds by the scheduler (system session); polls only when the market is open, a user with
+    live prices on has looked recently, and a poll is due. One poll serves every user."""
+    cfg = {"poll_seconds": _poll_seconds(s)}
     now = now or utcnow()
     market = market_status(now, _holidays(s))
     if not market.open:
@@ -145,24 +162,26 @@ def _downsample(points: list, n: int) -> list:
 
 def live_view(s: Session, now: datetime | None = None) -> dict:
     now = now or utcnow()
-    cfg = st.get(s, "live")
+    cfg = {**st.get(s, "live"), "poll_seconds": _poll_seconds(s)}
     holidays = _holidays(s)
     market = market_status(now, holidays)
     session_start = datetime.combine(market.session_date, OPEN, IST)
-    rows = _stock_rows(s)
-    ids = [r.inst.id for r in rows]
-    today = {}
-    for t in repo.ticks_since(s, session_start, ids):
-        today.setdefault(t.instrument_id, []).append((as_utc(t.ts), t.price))
-    latest = repo.latest_tick_per_instrument(s)
+    rows = [r for r in _stock_rows(s) if r.inst.security_id]
+    sids = sorted({r.inst.security_id for r in rows})
+    by_sec: dict[int, list] = {}
+    for t in repo.ticks_since(s, session_start, sids):
+        by_sec.setdefault(t.security_id, []).append((as_utc(t.ts), t.price))
+    today = {r.inst.id: by_sec[r.inst.security_id] for r in rows if r.inst.security_id in by_sec}
+    latest_sec = repo.latest_tick_per_security(s, sids) if sids else {}
+    latest = {r.inst.id: latest_sec[r.inst.security_id] for r in rows if r.inst.security_id in latest_sec}
     out_rows, live_rows = [], []
     for r in rows:
         iid = r.inst.id
         tick = latest.get(iid)
         price, ts = (tick.price, as_utc(tick.ts)) if tick else (None, None)
-        prev = repo.close_before(s, iid, market.session_date)
+        prev = repo.close_before(s, r.inst.security_id, market.session_date)
         prev_close = prev.price if prev else None
-        err = STATE.errors.get(iid)
+        err = STATE.errors.get(r.inst.security_id)
         stale = is_stale(ts, now, cfg["poll_seconds"])
         ch, pct = day_change(price, prev_close) if ts and ts >= session_start else (None, None)
         eod = r.quote

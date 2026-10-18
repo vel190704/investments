@@ -49,22 +49,23 @@ class FakeProvider:
         for r in refs:
             key = r.symbol or r.name
             if key in self.fail:
-                out[r.instrument_id] = FetchError("boom")
+                out[r.security_id] = FetchError("boom")
             elif key in self.prices:
-                out[r.instrument_id] = Quote(D(self.prices[key]), date(2026, 10, 1), "fake", key, D("100"))
+                out[r.security_id] = Quote(D(self.prices[key]), date(2026, 10, 1), "fake", key, D("100"))
         return out
 
 
 def test_refresh_survives_failures_and_caches_quotes(session, workbook):
     import_workbook(session, workbook)
     res = refresh_prices(session, providers=[FakeProvider({"LT": "3693.4", "ITC": "260"}, fail={"SBIN"})])
-    assert res["ok_count"] == 2 and res["error_count"] == 17
+    # 16 stocks/ETFs are priced per security; the 3 funds have no confirmed scheme code, so no security yet
+    assert res["ok_count"] == 2 and res["error_count"] == 14
     assert any(r.get("error") == "boom" for r in res["results"])
     assert len(session.scalars(select(PriceQuote)).all()) == 2
     # refreshing the same market date updates rather than duplicates
     refresh_prices(session, providers=[FakeProvider({"LT": "3700"})])
     lt = session.scalar(select(Instrument).where(Instrument.symbol == "LT"))
-    qs = session.scalars(select(PriceQuote).where(PriceQuote.instrument_id == lt.id)).all()
+    qs = session.scalars(select(PriceQuote).where(PriceQuote.security_id == lt.security_id)).all()
     assert len(qs) == 1 and qs[0].price == D("3700")
 
 

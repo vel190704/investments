@@ -21,4 +21,8 @@ def get_or_create(session: Session, cache: dict[str, Instrument], key: str, asse
         cache[key] = inst
     inst.name, inst.platform = name, platform or inst.platform
     inst.category = derive_category(asset_type, name, inst.exposure)
+    if created or inst.security_id is None:
+        from app.services.securities import link
+
+        link(session, inst)
     return inst, created

@@ -43,7 +43,8 @@ def test_stale_and_review_rules():
 def test_service_creates_each_alert_once(session, workbook):
     import_workbook(session, workbook)
     lt = session.scalar(select(Instrument).where(Instrument.symbol == "LT"))
-    session.add(NewsItem(isin="INE018A01030", instrument_id=lt.id, company="Larsen & Toubro", title="Q2 results",
+    lt.isin = "INE018A01030"  # news is shared; alerts cover only companies this user tracks (confirmed ISIN)
+    session.add(NewsItem(isin="INE018A01030", company="Larsen & Toubro", title="Q2 results",
                          source="NSE", source_kind="EXCHANGE", url="https://x/r", published_at=datetime.now(UTC),
                          category="results", category_origin="RULE", dedupe_key="k"))
     jn.add_entry(session, lt.id, "w", "c", "h", date(2026, 1, 1))

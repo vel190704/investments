@@ -18,7 +18,9 @@ def make_engine(url: str) -> Engine:
     is_sqlite = url.startswith("sqlite")
     engine = create_engine(
         url,
-        connect_args={"check_same_thread": False} if is_sqlite else {},
+        # Postgres: no server-side prepared statements (Supabase's transaction pooler can't keep them)
+        connect_args={"check_same_thread": False} if is_sqlite else {"prepare_threshold": None},
+        pool_pre_ping=not is_sqlite,
         future=True,
     )
     if is_sqlite:
@@ -65,11 +67,15 @@ def init_db() -> None:
 
 
 @contextmanager
-def session_scope() -> Iterator[Session]:
+def session_scope(user_id: int | None = None, system: bool = False) -> Iterator[Session]:
+    """A unit of work for one user (`user_id`) or an explicit system job (`system=True`).
+    Per-user tables are filtered and stamped by app/tenancy.py; with neither set they are off limits."""
+    import app.tenancy  # noqa: F401  (registers the isolation events)
+
     if _SessionLocal is None:
         configure()
     assert _SessionLocal is not None
-    session = _SessionLocal()
+    session = _SessionLocal(info={"user_id": user_id, "system": system})
     try:
         yield session
         session.commit()
@@ -78,9 +84,3 @@ def session_scope() -> Iterator[Session]:
         raise
     finally:
         session.close()
-
-
-def get_session() -> Iterator[Session]:
-    """FastAPI dependency."""
-    with session_scope() as session:
-        yield session

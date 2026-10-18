@@ -122,7 +122,7 @@ def ensure_starter(s: Session, held_sectors: list[str]) -> int:
     rows = [{"sector": sec, "tags": list(sc.STARTER[sec]), "origin": "STARTER", "note": sc.STARTER_LABEL}
             for sec in dict.fromkeys(held_sectors) if sec in sc.STARTER]
     s.flush()
-    n = repo.insert_ignore(s, SectorSensitivity, rows, ["sector"])
+    n = repo.insert_ignore(s, SectorSensitivity, rows, ["user_id", "sector"])
     for obj in [o for o in s.identity_map.values() if isinstance(o, SectorSensitivity)]:
         s.expire(obj)  # reload rows another session may have inserted
     return n
@@ -146,7 +146,7 @@ def set_tags(s: Session, sector: str, tags: list[str], note: str | None = None) 
     bad = [t for t in tags if t not in sc.TAGS]
     if bad:
         raise MacroError(f"unknown tag(s): {', '.join(bad)}; allowed: {', '.join(sc.TAGS)}")
-    row = s.get(SectorSensitivity, sector)
+    row = s.scalar(select(SectorSensitivity).where(SectorSensitivity.sector == sector))
     if row is None:
         row = SectorSensitivity(sector=sector)
         s.add(row)

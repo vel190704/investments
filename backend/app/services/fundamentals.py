@@ -12,7 +12,7 @@ from app import repository as repo
 from app.calc.fundamentals import (
     INDEX_ONLY, METRICS, NO_RELIABLE_SOURCE, NOT_PROVIDED, check_auto, check_manual, portfolio_median,
 )
-from app.models import InstrumentFact
+from app.models import InstrumentFact, Security, SecurityFact
 from app.services.classification import sectors_by_instrument
 from app.timeutil import as_utc, today_ist, utcnow
 
@@ -31,13 +31,41 @@ def yfinance_info(symbol: str) -> dict:
     return info
 
 
-def _upsert(s: Session, iid: int, metric: str, origin: str) -> InstrumentFact:
+def auto_fact(s: Session, security_id: int, metric: str) -> SecurityFact:
+    """The shared AUTO value of a metric for a security (get or create)."""
+    f = s.scalar(select(SecurityFact).where(SecurityFact.security_id == security_id, SecurityFact.metric == metric))
+    if f is None:
+        f = SecurityFact(security_id=security_id, metric=metric, origin="AUTO", source="")
+        s.add(f)
+    return f
+
+
+def _upsert(s: Session, iid: int, metric: str, origin: str) -> InstrumentFact | SecurityFact:
+    """MANUAL: the user's own row for their instrument. AUTO: the shared row of the instrument's security."""
+    if origin == "AUTO":
+        inst = repo.get_instrument(s, iid)
+        if inst is None or inst.security_id is None:
+            raise KeyError(iid)
+        return auto_fact(s, inst.security_id, metric)
     f = s.scalar(select(InstrumentFact).where(InstrumentFact.instrument_id == iid, InstrumentFact.metric == metric,
                                               InstrumentFact.origin == origin))
     if f is None:
         f = InstrumentFact(instrument_id=iid, metric=metric, origin=origin)
         s.add(f)
     return f
+
+
+def facts_map(s: Session) -> dict[tuple[int, str, str], InstrumentFact | SecurityFact]:
+    """{(instrument_id, metric, origin): fact} for the user's instruments: AUTO via their securities, plus MANUAL."""
+    sec_map = repo.instrument_security_map(s)
+    out: dict[tuple[int, str, str], InstrumentFact | SecurityFact] = {}
+    if sec_map:
+        for f in s.scalars(select(SecurityFact).where(SecurityFact.security_id.in_(sec_map))):
+            for iid in sec_map[f.security_id]:
+                out[(iid, f.metric, "AUTO")] = f
+    for f in s.scalars(select(InstrumentFact)):
+        out[(f.instrument_id, f.metric, f.origin)] = f
+    return out
 
 
 def refresh_fundamentals(s: Session, fetch=None, statements=None) -> dict:
@@ -52,14 +80,22 @@ def refresh_fundamentals(s: Session, fetch=None, statements=None) -> dict:
 
 
 def apply_info(s: Session, iid: int, info: dict) -> None:
-    """Store every Ticker.info-based metric (plausibility-checked) as an AUTO fact."""
+    """Store Ticker.info metrics for a user's instrument (written to its shared security)."""
+    inst = repo.get_instrument(s, iid)
+    if inst is None or inst.security_id is None:
+        raise KeyError(iid)
+    apply_security_info(s, inst.security_id, info)
+
+
+def apply_security_info(s: Session, security_id: int, info: dict) -> None:
+    """Store every Ticker.info-based metric (plausibility-checked) as a shared AUTO fact."""
     mrq = info.get("mostRecentQuarter")
     quarter = datetime.fromtimestamp(mrq, UTC).date() if isinstance(mrq, (int, float)) else None
     for m in METRICS.values():
         if m.applies_to != "STOCK" or not m.auto_field:
             continue
         status, value, note = check_auto(m.key, info.get(m.auto_field))
-        f = _upsert(s, iid, m.key, "AUTO")
+        f = auto_fact(s, security_id, m.key)
         f.status, f.value, f.value_text, f.note = status, value, None, note
         f.source = f"{SOURCE}: {m.auto_field}"
         f.fetched_at = utcnow()
@@ -67,18 +103,25 @@ def apply_info(s: Session, iid: int, info: dict) -> None:
         f.as_of = quarter if (financial and quarter) else today_ist()
 
 
+def held_stock_securities(s: Session) -> list[Security]:
+    """Stocks held by the session's user (or by anyone, in a system session): one fetch serves every holder."""
+    from app.services.securities import held_security_ids
+
+    ids = held_security_ids(s)
+    return list(s.scalars(select(Security).where(Security.id.in_(ids), Security.kind == "STOCK")
+                          .order_by(Security.symbol))) if ids else []
+
+
 def _refresh_info(s: Session, fetch) -> dict:
     report = {"ok": [], "errors": []}
-    for inst in repo.all_instruments(s):
-        if inst.asset_type != "STOCK" or not inst.symbol:
-            continue
+    for sec in held_stock_securities(s):
         try:
-            info = fetch(inst.symbol)
+            info = fetch(sec.symbol)
         except Exception as e:
-            report["errors"].append(f"{inst.symbol}: {type(e).__name__}: {e}")
+            report["errors"].append(f"{sec.symbol}: {type(e).__name__}: {e}")
             continue
-        apply_info(s, inst.id, info)
-        report["ok"].append(inst.symbol)
+        apply_security_info(s, sec.id, info)
+        report["ok"].append(sec.symbol)
     s.flush()
     report["summary"] = f"{len(report['ok'])} stocks refreshed" + (f", {len(report['errors'])} failed" if report["errors"] else "")
     return report
@@ -107,7 +150,7 @@ def delete_manual(s: Session, iid: int, metric: str) -> None:
     s.flush()
 
 
-def _cell(m, auto: InstrumentFact | None, manual: InstrumentFact | None, not_applicable: str | None = None) -> dict:
+def _cell(m, auto: SecurityFact | None, manual: InstrumentFact | None, not_applicable: str | None = None) -> dict:
     """One displayed value with provenance. Manual entries win; otherwise the source value or N/A + reason."""
     base = {"metric": m.key, "label": m.label, "unit": m.unit, "manual_allowed": m.manual}
     if not_applicable:
@@ -134,8 +177,7 @@ def report(s: Session) -> dict:
     from app.services.portfolio import load_rows
 
     rows, _ = load_rows(s)
-    facts: dict[tuple[int, str, str], InstrumentFact] = {
-        (f.instrument_id, f.metric, f.origin): f for f in s.scalars(select(InstrumentFact))}
+    facts = facts_map(s)
     secs = sectors_by_instrument(s)
     stocks = [r for r in rows if r.inst.asset_type == "STOCK"]
     funds = [r for r in rows if r.inst.asset_type == "MF"]

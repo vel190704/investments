@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from tests.conftest import make_user
 from app import db
 from app.main import app
 from app.market.base import Quote
@@ -28,7 +29,7 @@ def client(tmp_path, monkeypatch):
 
 
 def price_everything():
-    with db.session_scope() as s:
+    with db.session_scope(user_id=make_user()) as s:
         for i in s.scalars(select(Instrument)):
             if i.symbol:
                 store_quote(s, i.id, Quote(D(PRICES[i.symbol]), date(2026, 10, 1), "test", i.symbol, D(PRICES[i.symbol])))
@@ -162,7 +163,7 @@ def test_phase3_endpoints_with_disclosure_upload(client, workbook):
     funds = {i["name"].split(" ")[0]: i["instrument_id"] for i in client.get("/api/instruments").json()
              if i["asset_type"] == "MF"}
     # LT needs a confirmed ISIN to be combined with fund holdings
-    with db.session_scope() as s:
+    with db.session_scope(user_id=make_user()) as s:
         s.scalar(select(Instrument).where(Instrument.symbol == "LT")).isin = "INE018A01030"
     r = client.post(f"/api/disclosures?instrument_id={funds['ICICI']}&kind=AMC_DISCLOSURE",
                     files={"file": ("icici.xlsx", fx.icici(), "application/octet-stream")})

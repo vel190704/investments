@@ -55,7 +55,9 @@ def test_nothing_seeded_and_median_needs_three(session, workbook):
     assert D(ps["peer_median"]) == D("2")
     assert pe["mine"] == "30.08793"  # own value from the recorded LT payload
     # own computed metrics stored with derivation; annual lines stored
-    peg = session.scalar(select(InstrumentFact).where(InstrumentFact.metric == "peg"))
+    from app.models import SecurityFact
+
+    peg = session.scalar(select(SecurityFact).where(SecurityFact.metric == "peg"))
     assert peg.status == "OK" and "PEG = P/E" in peg.note
     assert session.scalar(select(AnnualFinancial).where(AnnualFinancial.symbol == "LT", AnnualFinancial.metric == "fcf"))
     # peers are cached for a day: no new fetch

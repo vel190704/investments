@@ -14,7 +14,7 @@ from app.calc import framework as fw
 from app.calc import valuation as v
 from app.calc.fundamentals import check_auto
 from app.market.statements import SOURCE, fetch_payload
-from app.models import AnnualFinancial, InstrumentFact, PeerMetric, PeerSet, PriceQuote
+from app.models import AnnualFinancial, PeerMetric, PeerSet, PriceQuote
 from app.services import settings as st
 from app.services.source_health import record
 from app.timeutil import as_utc, today_ist, utcnow
@@ -40,16 +40,20 @@ def store_annual(s: Session, symbol: str, payload: dict) -> None:
 
 
 def store_own(s: Session, iid: int, payload: dict) -> None:
-    """Ticker.info metrics + computed metrics as AUTO InstrumentFact rows (OK / MISSING with the reason)."""
-    from app.services.fundamentals import apply_info
+    """For a user's instrument: written to its shared security."""
+    inst = repo.get_instrument(s, iid)
+    if inst is None or inst.security_id is None:
+        raise KeyError(iid)
+    store_security(s, inst.security_id, payload)
 
-    apply_info(s, iid, payload.get("info") or {})
+
+def store_security(s: Session, security_id: int, payload: dict) -> None:
+    """Ticker.info metrics + computed metrics as shared AUTO facts (OK / MISSING with the reason)."""
+    from app.services.fundamentals import apply_security_info, auto_fact
+
+    apply_security_info(s, security_id, payload.get("info") or {})
     for key, res in v.compute_all(payload).items():
-        f = s.scalar(select(InstrumentFact).where(InstrumentFact.instrument_id == iid, InstrumentFact.metric == key,
-                                                  InstrumentFact.origin == "AUTO"))
-        if f is None:
-            f = InstrumentFact(instrument_id=iid, metric=key, origin="AUTO")
-            s.add(f)
+        f = auto_fact(s, security_id, key)
         f.status = "OK" if res.status == "OK" else "MISSING"
         f.value, f.value_text = res.value, None
         f.note = res.reason if res.status != "OK" else (
@@ -112,16 +116,16 @@ def refresh(s: Session, fetch=fetch_payload, sleep=time.sleep, own: bool = True,
         return fetch(sym)
 
     if own:
-        for inst in repo.all_instruments(s):
-            if inst.asset_type != "STOCK" or not inst.symbol:
-                continue
+        from app.services.fundamentals import held_stock_securities
+
+        for sec in held_stock_securities(s):  # one fetch per security, shared by every holder
             try:
-                p = get(inst.symbol)
-                store_annual(s, inst.symbol, p)
-                store_own(s, inst.id, p)
-                report["own"].append(inst.symbol)
+                p = get(sec.symbol)
+                store_annual(s, sec.symbol, p)
+                store_security(s, sec.id, p)
+                report["own"].append(sec.symbol)
             except Exception as e:
-                report["errors"].append(f"{inst.symbol}: {type(e).__name__}: {e}")
+                report["errors"].append(f"{sec.symbol}: {type(e).__name__}: {e}")
         record(s, "yfinance fundamentals", not report["errors"] or bool(report["own"]),
                f"{len(report['own'])} stocks, {len(report['errors'])} failed")
     if peers:
@@ -154,8 +158,12 @@ def refresh(s: Session, fetch=fetch_payload, sleep=time.sleep, own: bool = True,
 
 def _my_values(s: Session, iid: int) -> dict[str, dict]:
     """Effective value per metric (manual wins) with source, for framework + peer comparison."""
+    from app.services.fundamentals import facts_map
+
     facts: dict[str, dict] = {}
-    for f in s.scalars(select(InstrumentFact).where(InstrumentFact.instrument_id == iid)):
+    for (fid, _metric, _origin), f in facts_map(s).items():
+        if fid != iid:
+            continue
         cur = facts.get(f.metric)
         if f.status != "OK":
             facts.setdefault(f.metric, {"value": None, "source": f.source, "as_of": None, "reason": f.note})
@@ -190,7 +198,8 @@ def stock_view(s: Session, iid: int) -> dict:
     series = {}
     for a in s.scalars(select(AnnualFinancial).where(AnnualFinancial.symbol == (inst.symbol or ""))):
         series.setdefault(a.metric, {})[a.fiscal_year_end] = a.value
-    prices = {q.price_date: q.price for q in s.scalars(select(PriceQuote).where(PriceQuote.instrument_id == iid))}
+    prices = ({q.price_date: q.price for q in s.scalars(select(PriceQuote).where(PriceQuote.security_id == inst.security_id))}
+              if inst.security_id else {})
     hist = v.history(series, prices)
     own_pe = v.hist_pe_median(hist)
     fcf_series = [(d.isoformat(), val) for d, val in sorted(series.get("fcf", {}).items())]

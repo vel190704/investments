@@ -35,6 +35,8 @@ def _run(connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata, render_as_batch=True,
                       compare_type=True)
     with context.begin_transaction():
+        if connection.dialect.name == "postgresql":  # migrations act as the system under Row Level Security
+            connection.exec_driver_sql("SELECT set_config('app.system', 'on', true)")
         context.run_migrations()
 
 

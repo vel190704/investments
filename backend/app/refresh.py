@@ -11,13 +11,13 @@ def main() -> int:
 
     configure_logging()
     init_db()
-    with session_scope() as s:
+    with session_scope(system=True) as s:
         r = refresh_prices(s, trigger="manual")
     print(f"{r['ok_count']} updated, {r['error_count']} unavailable")
     try:
         from app.services.classification import refresh_classification
 
-        with session_scope() as s:
+        with session_scope(system=True) as s:
             print("Classification:", refresh_classification(s)["summary"])
     except Exception as e:  # never fail the price refresh because of classification
         print(f"Classification skipped: {e}")

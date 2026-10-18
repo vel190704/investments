@@ -31,39 +31,87 @@ def month_start_utc(now: datetime | None = None) -> datetime:
     return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
+def _user(s: Session):
+    from app.models import User
+
+    uid = s.info.get("user_id")
+    return s.get(User, uid) if uid is not None else None
+
+
+def global_calls_this_month() -> int:
+    """Calls on the platform key this month, across all users (for the global cap)."""
+    from app.db import session_scope
+
+    with session_scope(system=True) as sys_s:
+        return sys_s.scalar(select(func.count()).select_from(LlmCall).where(
+            LlmCall.created_at >= month_start_utc(), LlmCall.own_key.is_(False))) or 0
+
+
 def usage(s: Session) -> dict:
+    """This user's AI usage this month. Caps: the user's own Settings cap, the admin's per-user cap and (for
+    calls on the platform key) the global cap."""
     cfg = st.get(s, "llm")
+    plat = st.get(s, "llm_platform")
+    user = _user(s)
     q = select(func.count(), func.coalesce(func.sum(LlmCall.input_tokens), 0),
                func.coalesce(func.sum(LlmCall.output_tokens), 0)).where(LlmCall.created_at >= month_start_utc())
     calls, tin, tout = s.execute(q).one()
-    pin, pout = cfg.get("price_in_per_mtok"), cfg.get("price_out_per_mtok")
+    pin, pout = plat.get("price_in_per_mtok"), plat.get("price_out_per_mtok")
     if pin is None or pout is None:
-        cost, note = None, f"Set input/output prices in Settings to estimate cost. {st.PRICING_NOTE}"
+        cost, note = None, f"Token prices are not set (admin: Settings › AI platform). {st.PRICING_NOTE}"
     else:
         cost = str(((Decimal(tin) * Decimal(pin) + Decimal(tout) * Decimal(pout)) / 1_000_000).quantize(Decimal("0.0001")))
-        note = f"Estimate = tokens × ${pin}/M input + ${pout}/M output (your Settings). {st.PRICING_NOTE}"
-    return {"calls_this_month": calls, "cap": cfg["monthly_call_cap"], "input_tokens": tin, "output_tokens": tout,
-            "estimated_cost_usd": cost, "pricing_note": note}
+        note = f"Estimate = tokens × ${pin}/M input + ${pout}/M output (platform settings). {st.PRICING_NOTE}"
+    admin_cap = user.ai_monthly_cap if user is not None else cfg["monthly_call_cap"]
+    return {"calls_this_month": calls, "cap": min(cfg["monthly_call_cap"], admin_cap), "your_cap": cfg["monthly_call_cap"],
+            "admin_cap": admin_cap, "input_tokens": tin, "output_tokens": tout,
+            "estimated_cost_usd": cost, "pricing_note": note,
+            "ai_enabled_by_admin": bool(user and (user.ai_enabled or user.role == "admin")),
+            "own_key": bool(user and user.own_key_encrypted)}
+
+
+def _api_key(s: Session) -> tuple[str | None, bool]:
+    """(key, is_own): the user's own key if stored, else the platform key. Never logged or returned."""
+    from app.config import get_settings
+
+    user = _user(s)
+    if user is not None and user.own_key_encrypted:
+        from app.crypto import decrypt
+
+        return decrypt(user.own_key_encrypted), True
+    return get_settings().anthropic_api_key or None, False
 
 
 def gate(s: Session) -> str | None:
-    """Reason the LLM can't be called, or None."""
-    from app.config import get_settings
-
+    """Reason the LLM can't be called for this user, or None."""
     cfg = st.get(s, "llm")
+    user = _user(s)
+    if user is not None and not (user.ai_enabled or user.role == "admin"):
+        return "AI analysis is not enabled for your account (ask the admin)."
     if not cfg["outbound_enabled"]:
         return "Privacy toggle is off: outbound LLM calls are disabled (Settings › AI analysis)."
-    if not get_settings().anthropic_api_key:
-        return "No ANTHROPIC_API_KEY in .env: AI analysis is disabled."
+    try:
+        key, own = _api_key(s)
+    except Exception as e:  # stored key unreadable
+        return str(e)
+    if not key:
+        return "No AI key configured on the server: AI analysis is disabled."
     u = usage(s)
     if u["calls_this_month"] >= u["cap"]:
-        return f"Monthly call cap reached ({u['calls_this_month']}/{u['cap']}); raise it in Settings or wait."
+        return f"Monthly call cap reached ({u['calls_this_month']}/{u['cap']})."
+    if not own:
+        g = global_calls_this_month()
+        cap = st.get(s, "llm_platform")["global_monthly_cap"]
+        if g >= cap:
+            return f"The app's monthly AI budget is used up ({g}/{cap}); it resets on the 1st."
     return None
 
 
 def default_provider(s: Session) -> LLMProvider:
     cfg = st.get(s, "llm")
-    return AnthropicProvider(model=st.llm_model(s), effort=cfg["effort"], refusal_fallback=cfg.get("refusal_fallback", False))
+    key, _own = _api_key(s)
+    return AnthropicProvider(model=st.llm_model(s), effort=cfg["effort"], api_key=key,
+                             refusal_fallback=cfg.get("refusal_fallback", False))
 
 
 def test_connection(s: Session, model: str | None = None, api_key: str | None = None) -> dict:
@@ -79,7 +127,11 @@ def test_connection(s: Session, model: str | None = None, api_key: str | None = 
            "refusal_fallback": fallback, "sent": PING_PROMPT, "input_tokens": 0, "output_tokens": 0,
            "latency_ms": None, "error": None, "reply": None}
     try:
-        provider = AnthropicProvider(model=requested, effort=cfg["effort"], api_key=api_key, refusal_fallback=fallback)
+        user = _user(s)
+        if user is not None and not (user.ai_enabled or user.role == "admin"):
+            raise LLMUnavailable("AI analysis is not enabled for your account (ask the admin).")
+        provider = AnthropicProvider(model=requested, effort=cfg["effort"], api_key=api_key or _api_key(s)[0],
+                                     refusal_fallback=fallback)
     except LLMUnavailable as e:
         out["error"] = str(e)
         return out
@@ -106,7 +158,11 @@ def test_connection(s: Session, model: str | None = None, api_key: str | None = 
 def _log(s: Session, purpose: str, model: str, ok: bool, tin: int = 0, tout: int = 0, error: str | None = None) -> None:
     from app.services.source_health import record
 
-    s.add(LlmCall(purpose=purpose, model=model, ok=ok, input_tokens=tin, output_tokens=tout, error=error))
+    try:
+        own = _api_key(s)[1]
+    except Exception:
+        own = False
+    s.add(LlmCall(purpose=purpose, model=model, ok=ok, input_tokens=tin, output_tokens=tout, error=error, own_key=own))
     s.flush()
     provider_ok = ok or (error is not None and not error.startswith(("Could not reach", "Anthropic API error",
                                                                       "Rate limited", "The Anthropic API key")))
@@ -252,7 +308,11 @@ def suggest_categories(s: Session, provider: LLMProvider | None = None, limit: i
     """Ask the LLM to suggest categories ONLY for items the rules left as 'other'. Only headlines are sent."""
     from app.calc.news import CATEGORIES
 
-    items = list(s.scalars(select(NewsItem).where(NewsItem.category == "other", NewsItem.category_origin == "RULE")
+    from app.services.news import tracked_companies
+
+    mine = [t.isin for t in tracked_companies(s)[0]]  # news is shared: only headlines about this user's companies
+    items = list(s.scalars(select(NewsItem).where(NewsItem.category == "other", NewsItem.category_origin == "RULE",
+                                                  NewsItem.isin.in_(mine or ["-"]))
                            .order_by(NewsItem.published_at.desc()).limit(limit)))
     if not items:
         return {"suggested": 0}

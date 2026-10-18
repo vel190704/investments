@@ -3,6 +3,7 @@ from decimal import Decimal as D
 
 import pytest
 
+from tests.conftest import make_user
 from app.calc.scenarios import STARTER, exposure_by_tag
 from app.importer.run import import_workbook
 from app.services import macro as mc
@@ -59,7 +60,11 @@ def test_exposure_by_tag_sums_lookthrough_sector_weights():
 def test_starter_tags_are_labelled_and_user_edits_win(session, workbook):
     import_workbook(session, workbook)
     mc.ensure_starter(session, ["Construction", "Unknown sector"])
-    row = session.get(__import__("app.models", fromlist=["SectorSensitivity"]).SectorSensitivity, "Construction")
+    from sqlalchemy import select as _select
+
+    from app.models import SectorSensitivity as _SS
+
+    row = session.scalar(_select(_SS).where(_SS.sector == "Construction"))
     assert row.origin == "STARTER" and "review and edit" in row.note
     mc.set_tags(session, "Construction", ["rate-sensitive"])
     mc.ensure_starter(session, ["Construction"])
@@ -91,16 +96,17 @@ def test_sensitivity_table_lists_only_real_sectors(session, workbook):
     assert set(names) == {"Construction", "Financial Services"} and not any(n.startswith(("Not looked through", "Unclassified", "Debt, cash")) for n in names)
 
 
-def _race(tmp_path, monkeypatch, fn):
+def _race(tmp_path, monkeypatch, fn, fresh: bool = True):
     """Run fn(session) in two threads that both finish reading before either writes."""
     import threading
 
     from app import db
     from app.models import SectorSensitivity
 
-    if db.get_engine().url.database is None or "race" not in str(db.get_engine().url):
+    if fresh:
         db.configure(f"sqlite:///{tmp_path / 'race.db'}")
         db.init_db()
+    uid = make_user()  # the account exists before the workers race on the seed itself
     barrier = threading.Barrier(2, timeout=2)
 
 
@@ -120,7 +126,7 @@ def _race(tmp_path, monkeypatch, fn):
 
     def worker():
         try:
-            with db.session_scope() as s:
+            with db.session_scope(user_id=uid) as s:
                 fn(s)
         except BaseException as e:  # noqa: BLE001 - collected for the assertion
             errors.append(e)
@@ -131,7 +137,7 @@ def _race(tmp_path, monkeypatch, fn):
     for t in threads:
         t.join(15)
     monkeypatch.undo()
-    with db.session_scope() as s:
+    with db.session_scope(user_id=make_user()) as s:
         rows = list(s.scalars(__import__("sqlalchemy").select(SectorSensitivity)))
     return errors, rows
 
@@ -148,9 +154,9 @@ def test_starter_seeding_never_overwrites_user_tags_even_when_racing(tmp_path, m
 
     db.configure(f"sqlite:///{tmp_path / 'race2.db'}")
     db.init_db()
-    with db.session_scope() as s:
+    with db.session_scope(user_id=make_user()) as s:
         mc.set_tags(s, "Construction", ["rate-sensitive"])
-    errors, rows = _race(tmp_path, monkeypatch, lambda s: mc.ensure_starter(s, ["Construction"]))
+    errors, rows = _race(tmp_path, monkeypatch, lambda s: mc.ensure_starter(s, ["Construction"]), fresh=False)
     assert errors == [] and [(r.origin, r.tags) for r in rows] == [("USER", ["rate-sensitive"])]
 
 

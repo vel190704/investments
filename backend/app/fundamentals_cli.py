@@ -11,7 +11,7 @@ def main() -> int:
 
     configure_logging()
     init_db()
-    with session_scope() as s:
+    with session_scope(system=True) as s:
         r = refresh_fundamentals(s)
     print(r["summary"])
     for e in r["errors"]:

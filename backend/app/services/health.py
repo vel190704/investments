@@ -18,9 +18,17 @@ from app.timeutil import today_ist
 
 
 def price_history(s: Session, ids: list[int]) -> dict[int, list[Decimal]]:
+    """Stored daily prices per instrument (via its shared security), oldest first."""
+    from app import repository as repo
+
     out: dict[int, list[Decimal]] = {i: [] for i in ids}
-    for q in s.scalars(select(PriceQuote).where(PriceQuote.instrument_id.in_(ids)).order_by(PriceQuote.price_date)):
-        out[q.instrument_id].append(q.price)
+    sec_map = {sid: [i for i in iids if i in out] for sid, iids in repo.instrument_security_map(s).items()}
+    sec_map = {sid: iids for sid, iids in sec_map.items() if iids}
+    if not sec_map:
+        return out
+    for q in s.scalars(select(PriceQuote).where(PriceQuote.security_id.in_(sec_map)).order_by(PriceQuote.price_date)):
+        for iid in sec_map[q.security_id]:
+            out[iid].append(q.price)
     return out
 
 

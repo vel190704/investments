@@ -13,7 +13,9 @@ from sqlalchemy.orm import Session
 
 from app import repository as repo
 from app.calc.allocation import OVERRIDABLE_CLASSES, region_for_global_index
-from app.models import InstrumentFact, Instrument, SectorAssignment
+from types import SimpleNamespace
+
+from app.models import InstrumentFact, Instrument, SectorAssignment, Security, SecuritySector
 from app.timeutil import today_ist, utcnow
 
 ORIGIN_PRIORITY = ("MANUAL", "EXCEL", "NSE")
@@ -39,10 +41,28 @@ def effective_sector(assignments: list[SectorAssignment]) -> EffectiveSector:
 
 
 def sectors_by_instrument(s: Session) -> dict[int, EffectiveSector]:
-    grouped: dict[int, list[SectorAssignment]] = {}
+    """The user's MANUAL/EXCEL assignments plus the shared NSE sector of each instrument's security."""
+    grouped: dict[int, list] = {}
     for a in s.scalars(select(SectorAssignment)):
         grouped.setdefault(a.instrument_id, []).append(a)
+    sec_map = repo.instrument_security_map(s)
+    if sec_map:
+        for ss in s.scalars(select(SecuritySector).where(SecuritySector.security_id.in_(sec_map))):
+            for iid in sec_map[ss.security_id]:
+                grouped.setdefault(iid, []).append(
+                    SimpleNamespace(origin="NSE", sector=ss.sector, source=ss.source, as_of=ss.as_of))
     return {i.id: effective_sector(grouped.get(i.id, [])) for i in repo.all_instruments(s)}
+
+
+def upsert_security_sector(s: Session, security_id: int, sector: str, source: str, as_of: date,
+                           note: str | None = None) -> SecuritySector:
+    row = s.get(SecuritySector, security_id)
+    if row is None:
+        row = SecuritySector(security_id=security_id)
+        s.add(row)
+    row.sector, row.source, row.as_of, row.note = sector.strip(), source, as_of, note
+    s.flush()
+    return row
 
 
 def upsert_assignment(s: Session, instrument_id: int, origin: str, sector: str, source: str, as_of: date,
@@ -72,70 +92,79 @@ def etf_sector_label(inst: Instrument) -> str | None:
 
 
 def refresh_classification(s: Session) -> dict:
-    """Fetch NSE index lists + ETF list + AMFI file and (re)write AUTO classifications."""
+    """Fetch NSE index lists + ETF list + AMFI file and (re)write the shared classifications of held securities.
+    Run as a system job it covers every user's holdings once; per-user fields (ETF region/exposure) are updated on
+    each linked instrument."""
     from app.resolve.sources import amfi_schemes, nse_industries, nse_securities
+    from app.services.fundamentals import auto_fact
+    from app.services.securities import held_security_ids
 
     report = {"stocks_classified": [], "stocks_unclassified": [], "etfs": [], "funds": [], "errors": []}
-    instruments = repo.all_instruments(s)
-    stocks = [i for i in instruments if i.asset_type == "STOCK"]
-    etfs = [i for i in instruments if i.asset_type == "ETF"]
-    funds = [i for i in instruments if i.asset_type == "MF"]
+    ids = held_security_ids(s)
+    secs = list(s.scalars(select(Security).where(Security.id.in_(ids)).order_by(Security.key))) if ids else []
+    stocks = [x for x in secs if x.kind == "STOCK"]
+    etfs = [x for x in secs if x.kind == "ETF"]
+    funds = [x for x in secs if x.kind == "MF"]
+    by_security: dict[int, list[Instrument]] = {}
+    for inst in repo.all_instruments(s):
+        if inst.security_id:
+            by_security.setdefault(inst.security_id, []).append(inst)
 
     if stocks:
         try:
             by_isin, by_symbol, fetched = nse_industries()
-            for i in stocks:
-                hit = by_isin.get(i.isin or "") or by_symbol.get((i.symbol or "").upper())
+            for x in stocks:
+                hit = by_symbol.get((x.symbol or "").upper()) or by_isin.get(x.isin or "")
                 if hit is None:
-                    s.execute(delete(SectorAssignment).where(SectorAssignment.instrument_id == i.id,
-                                                             SectorAssignment.origin == "NSE"))
-                    report["stocks_unclassified"].append(i.symbol)
+                    row = s.get(SecuritySector, x.id)
+                    if row is not None:
+                        s.delete(row)
+                    report["stocks_unclassified"].append(x.symbol)
                     continue
-                how = "ISIN" if i.isin and hit.isin == i.isin else "NSE symbol"
-                upsert_assignment(s, i.id, "NSE", hit.industry, f"NSE {hit.list_name} constituent list (Industry)",
-                                  fetched.date(), f"matched by {how}")
-                report["stocks_classified"].append(f"{i.symbol}: {hit.industry}")
+                if hit.isin and not x.isin:
+                    x.isin = hit.isin
+                upsert_security_sector(s, x.id, hit.industry, f"NSE {hit.list_name} constituent list (Industry)",
+                                       fetched.date(), "matched by NSE symbol")
+                report["stocks_classified"].append(f"{x.symbol}: {hit.industry}")
         except Exception as e:
             report["errors"].append(f"NSE index lists unavailable: {e}")
 
     if etfs:
         try:
             nse, fetched = nse_securities()
-            for i in etfs:
-                sec = nse.get((i.symbol or "").upper())
+            for x in etfs:
+                sec = nse.get((x.symbol or "").upper())
                 if sec is None or sec.kind != "ETF":
-                    report["errors"].append(f"{i.symbol}: not in NSE ETF list")
+                    report["errors"].append(f"{x.symbol}: not in NSE ETF list")
                     continue
-                i.etf_underlying = sec.etf_underlying
-                i.etf_underlying_key = sec.underlying
-                i.region = (region_for_global_index(sec.underlying_asset)
-                            if (sec.etf_underlying or "").upper() == "GLOBAL INDICES" else "India")
-                if (sec.etf_underlying or "").upper() == "GLOBAL INDICES":
-                    i.exposure = "INTERNATIONAL"
-                label = etf_sector_label(i)
-                upsert_assignment(s, i.id, "NSE", label, "NSE ETF list (ETF Underlying / Underlying Asset)",
-                                  fetched.date(), f"underlying: {sec.underlying_asset}")
-                report["etfs"].append(f"{i.symbol}: {label}")
+                x.etf_underlying, x.etf_underlying_key = sec.etf_underlying, sec.underlying
+                x.isin = x.isin or sec.isin
+                international = (sec.etf_underlying or "").upper() == "GLOBAL INDICES"
+                region = region_for_global_index(sec.underlying_asset) if international else "India"
+                for i in by_security.get(x.id, []):
+                    i.region = region
+                    if international:
+                        i.exposure = "INTERNATIONAL"
+                label = etf_sector_label(SimpleNamespace(etf_underlying=sec.etf_underlying,
+                                                         etf_underlying_key=sec.underlying, region=region))
+                upsert_security_sector(s, x.id, label, "NSE ETF list (ETF Underlying / Underlying Asset)",
+                                       fetched.date(), f"underlying: {sec.underlying_asset}")
+                report["etfs"].append(f"{x.symbol}: {label}")
         except Exception as e:
             report["errors"].append(f"NSE ETF list unavailable: {e}")
 
     if funds:
         try:
             schemes, fetched = amfi_schemes()
-            for i in funds:
-                sch = schemes.get(i.scheme_code or "")
+            for x in funds:
+                sch = schemes.get(x.scheme_code or "")
                 if sch is None or not sch.category:
-                    report["errors"].append(f"{i.name}: category needs a confirmed AMFI scheme code")
+                    report["errors"].append(f"scheme {x.scheme_code}: no category in NAVAll.txt")
                     continue
-                f = s.scalar(select(InstrumentFact).where(InstrumentFact.instrument_id == i.id,
-                                                          InstrumentFact.metric == "category",
-                                                          InstrumentFact.origin == "AUTO"))
-                if f is None:
-                    f = InstrumentFact(instrument_id=i.id, metric="category", origin="AUTO")
-                    s.add(f)
+                f = auto_fact(s, x.id, "category")
                 f.status, f.value, f.value_text = "OK", None, sch.category
                 f.source, f.as_of, f.fetched_at = "AMFI NAVAll.txt section header", fetched.date(), utcnow()
-                report["funds"].append(f"{i.name}: {sch.category}")
+                report["funds"].append(f"{sch.name}: {sch.category}")
         except Exception as e:
             report["errors"].append(f"AMFI NAVAll.txt unavailable: {e}")
     from app.services.source_health import record

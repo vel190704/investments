@@ -93,7 +93,7 @@ def test_real_database_copy_migrates_with_data_preserved(tmp_path, monkeypatch):
                   for t in ("instruments", "transactions", "price_quotes", "identifier_candidates")}
     db.configure(f"sqlite:///{copy}")
     db.init_db()
-    with db.session_scope() as s:
+    with db.session_scope(system=True) as s:
         assert s.scalar(select(func.count()).select_from(Transaction)) == before["transactions"]
         assert s.scalar(select(func.count()).select_from(Instrument)) == before["instruments"]
     with sqlite3.connect(copy) as c:

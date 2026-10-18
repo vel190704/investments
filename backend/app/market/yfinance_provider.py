@@ -47,7 +47,7 @@ class YFinanceProvider:
         try:
             import yfinance as yf
         except Exception as e:  # pragma: no cover
-            return {r.instrument_id: FetchError(f"yfinance not available: {e}") for r in refs}
+            return {r.security_id: FetchError(f"yfinance not available: {e}") for r in refs}
         from app.net.outbound import outbound
 
         out: dict[int, Quote | FetchError] = {}
@@ -56,7 +56,7 @@ class YFinanceProvider:
             try:
                 with outbound("yfinance prices", "finance.yahoo.com (yfinance)", ticker=ticker):
                     df = yf.Ticker(ticker).history(period="10d", interval="1d", auto_adjust=False)
-                    out[r.instrument_id] = quote_from_history(df, ticker)
+                    out[r.security_id] = quote_from_history(df, ticker)
             except Exception as e:
-                out[r.instrument_id] = FetchError(f"{ticker}: {type(e).__name__}: {e}")
+                out[r.security_id] = FetchError(f"{ticker}: {type(e).__name__}: {e}")
         return out

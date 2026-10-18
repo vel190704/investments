@@ -93,9 +93,19 @@ def migrate(engine: Engine, backup: bool = True) -> dict:
         result["backup"] = str(backup_sqlite(path, label=f"pre-{head}"))
         log.info("Backed up %s to %s before migrating", path, result["backup"])
 
-    with engine.begin() as conn:
-        cfg.attributes["connection"] = conn
-        command.upgrade(cfg, "head")
+    with engine.connect() as conn:
+        if conn.dialect.name == "sqlite":  # batch migrations rebuild referenced tables: no FK checks meanwhile
+            conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            conn.commit()
+        with conn.begin():
+            cfg.attributes["connection"] = conn
+            command.upgrade(cfg, "head")
+        if conn.dialect.name == "sqlite":
+            bad = conn.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+            conn.commit()
+            if bad:
+                raise RuntimeError(f"foreign key problems after migration: {bad[:5]}")
     log.info("Migrated database from %s to %s", rev, head)
     return result
 

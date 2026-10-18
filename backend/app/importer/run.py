@@ -219,6 +219,9 @@ def _confirm_from_excel(session: Session, inst: Instrument, kind: str, value: st
         inst.isin = value
     else:
         inst.scheme_code = value
+        from app.services.securities import link
+
+        link(session, inst)  # a scheme code the user typed is theirs: link the fund to its shared NAV
 
 
 def _sync(session, report, parsed, fallbacks, plans, file_name, has_errors: bool) -> None:

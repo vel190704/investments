@@ -92,6 +92,9 @@ def decide(s: Session, candidate_id: int, confirm: bool) -> IdentifierCandidate:
             inst.scheme_code = c.value
             if not inst.isin and c.details.get("isin_growth"):
                 inst.isin = c.details["isin_growth"]
+            from app.services.securities import link
+
+            link(s, inst)
     else:
         was_confirmed = c.status == "CONFIRMED"
         c.status, c.decided_at = "REJECTED", now
@@ -100,5 +103,8 @@ def decide(s: Session, candidate_id: int, confirm: bool) -> IdentifierCandidate:
                 inst.isin = None
             if c.kind == "SCHEME_CODE" and inst.scheme_code == c.value:
                 inst.scheme_code = None
+                from app.services.securities import link
+
+                link(s, inst)
     s.flush()
     return c

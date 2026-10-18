@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     # Secrets: only from .env / environment. Never stored in the DB, returned by the API or logged.
     anthropic_api_key: str = ""
     claude_model: str = ""  # default LLM model (Settings can override)
+    # Phase 6: deployment and accounts
+    environment: str = "development"  # development | preview | production
+    auth_mode: str = "dev"  # dev (local fake user; refused in production) | supabase
+    dev_user_email: str = "owner@localhost"  # dev mode: the local user (owner of migrated single-user data)
+    admin_emails: str = ""  # comma-separated; these users are admins (and always allowed)
+    supabase_url: str = ""  # https://<project>.supabase.co
+    supabase_jwt_secret: str = ""  # legacy HS256 secret (only if the project still uses it)
+    supabase_jwt_audience: str = "authenticated"
+    supabase_service_role_key: str = ""  # optional, server-side only: sends invite emails from the admin page
+    field_encryption_key: str = ""  # Fernet key for users' own AI keys (optional feature)
     # Logging (app/logging_config.py)
     log_level: str = "INFO"
     log_format: str = "kv"  # kv (key=value lines) | json

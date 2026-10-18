@@ -128,7 +128,7 @@ def test_refresh_stores_by_isin_dedupes_and_reports_unavailable(session, workboo
 def test_retention_prunes_old_items(session, workbook):
     import_workbook(session, workbook)
     lt = session.scalar(select(Instrument).where(Instrument.symbol == "LT"))
-    session.add(NewsItem(isin="INE018A01030", instrument_id=lt.id, company="LT", title="old", source="x",
+    session.add(NewsItem(isin="INE018A01030", company="LT", title="old", source="x",
                          source_kind="NEWS", url="https://x/old", published_at=NOW - timedelta(days=91),
                          category="other", category_origin="RULE", dedupe_key="k"))
     session.flush()

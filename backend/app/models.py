@@ -1,4 +1,8 @@
-"""ORM models. Single user: no user tables, no user_id columns.
+"""ORM models.
+
+Multi-user (Phase 6): every per-user table inherits `UserOwned` (a NOT NULL user_id). Sessions carry the user and
+app/tenancy.py adds `user_id = :uid` to every ORM query on these tables, so a forgotten filter cannot leak rows.
+Market data (securities, quotes, ticks, auto fundamentals, NSE sectors, news, macro) is global: no user_id.
 
 Money: integer paise (*_paise). Quantities, prices, fractions: DecimalText (exact).
 """
@@ -15,47 +19,113 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import false
+from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
 
 from app.db import Base
 from app.types import DecimalText, UTCDateTime
 from app.timeutil import utcnow
 
 
-class Instrument(Base):
-    __tablename__ = "instruments"
+# ---------------- accounts
+class User(Base):
+    __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    instrument_key: Mapped[str] = mapped_column(String(200), unique=True)
+    auth_subject: Mapped[str | None] = mapped_column(String(64), unique=True)  # Supabase auth user uuid
+    email: Mapped[str] = mapped_column(String(320), unique=True)
+    role: Mapped[str] = mapped_column(String(10), default="user")  # admin | user
+    ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_monthly_cap: Mapped[int] = mapped_column(Integer, default=10)
+    own_key_encrypted: Mapped[str | None] = mapped_column(Text)  # Fernet token; never returned or logged
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    last_active_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class AllowedEmail(Base):
+    """Invite list: only these emails may use the app (open sign-up is off)."""
+
+    __tablename__ = "allowed_emails"
+
+    email: Mapped[str] = mapped_column(String(320), primary_key=True)
+    invited_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class UserOwned:
+    """Mixin for per-user tables. Never filter by hand: the session does it (app/tenancy.py)."""
+
+    @declared_attr
+    def user_id(cls) -> Mapped[int]:
+        return mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+
+
+# ---------------- global market identity
+class Security(Base):
+    """One tradable thing, shared by every user who holds it: an NSE symbol (stock/ETF) or an AMFI scheme code."""
+
+    __tablename__ = "securities"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(80), unique=True)  # NSE:LT | AMFI:120716
+    kind: Mapped[str] = mapped_column(String(10))  # STOCK | ETF | MF
+    symbol: Mapped[str | None] = mapped_column(String(50), index=True)
+    scheme_code: Mapped[str | None] = mapped_column(String(20), index=True)
+    isin: Mapped[str | None] = mapped_column(String(20))  # from NSE's own list (exact symbol match)
+    name: Mapped[str | None] = mapped_column(String(300))
+    etf_underlying: Mapped[str | None] = mapped_column(String(50))  # NSE: EQUITY|COMMODITY|DEBT|GLOBAL INDICES
+    etf_underlying_key: Mapped[str | None] = mapped_column(String(100))  # NSE: GOLD, SILVER, Nifty 50, ...
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class Instrument(UserOwned, Base):
+    """A user's own entry for a holding (named as in their workbook), linked to a global security once known."""
+
+    __tablename__ = "instruments"
+    __table_args__ = (UniqueConstraint("user_id", "instrument_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_key: Mapped[str] = mapped_column(String(200))
+    security_id: Mapped[int | None] = mapped_column(ForeignKey("securities.id"), index=True)
     asset_type: Mapped[str] = mapped_column(String(10))  # STOCK | ETF | MF
     name: Mapped[str] = mapped_column(String(300))
     symbol: Mapped[str | None] = mapped_column(String(50))
     isin: Mapped[str | None] = mapped_column(String(20))
     scheme_code: Mapped[str | None] = mapped_column(String(20))
     exposure: Mapped[str] = mapped_column(String(20), default="DOMESTIC")  # DOMESTIC | INTERNATIONAL
-    category: Mapped[str | None] = mapped_column(String(100))
+    category: Mapped[str | None] = mapped_column(String(100))  # label derived from the user's name for it
     platform: Mapped[str | None] = mapped_column(String(50))
-    # Phase 3 classification
+    # Phase 3 classification (the user's own overrides)
     asset_class_override: Mapped[str | None] = mapped_column(String(50))
-    etf_underlying: Mapped[str | None] = mapped_column(String(50))  # NSE: EQUITY|COMMODITY|DEBT|GLOBAL INDICES
-    etf_underlying_key: Mapped[str | None] = mapped_column(String(100))  # NSE: GOLD, SILVER, Nifty 50, ...
     region: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="instrument")
+    security: Mapped[Security | None] = relationship(lazy="joined")
+
+    # market metadata lives on the shared security
+    @property
+    def etf_underlying(self) -> str | None:
+        return self.security.etf_underlying if self.security else None
+
+    @property
+    def etf_underlying_key(self) -> str | None:
+        return self.security.etf_underlying_key if self.security else None
 
 
 TXN_SOURCES = ("excel", "ui")
 
 
-class Transaction(Base):
+class Transaction(UserOwned, Base):
     __tablename__ = "transactions"
-    __table_args__ = (CheckConstraint("source IN ('excel', 'ui')", name="ck_transactions_source"),)
+    __table_args__ = (CheckConstraint("source IN ('excel', 'ui')", name="ck_transactions_source"),
+                      UniqueConstraint("user_id", "row_key"))
 
     id: Mapped[int] = mapped_column(primary_key=True)
     instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
@@ -68,7 +138,7 @@ class Transaction(Base):
     platform: Mapped[str | None] = mapped_column(String(50))
     notes: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(20), default="excel")
-    row_key: Mapped[str] = mapped_column(String(100), unique=True)
+    row_key: Mapped[str] = mapped_column(String(100))
     source_file: Mapped[str | None] = mapped_column(String(300))
     source_row: Mapped[int | None] = mapped_column(Integer)
     imported_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
@@ -76,7 +146,7 @@ class Transaction(Base):
     instrument: Mapped[Instrument] = relationship(back_populates="transactions")
 
 
-class FallbackHolding(Base):
+class FallbackHolding(UserOwned, Base):
     __tablename__ = "fallback_holdings"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -92,7 +162,7 @@ class FallbackHolding(Base):
     source_row: Mapped[int | None] = mapped_column(Integer)
 
 
-class MonthlyPlanItem(Base):
+class MonthlyPlanItem(UserOwned, Base):
     __tablename__ = "monthly_plan_items"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -106,7 +176,7 @@ class MonthlyPlanItem(Base):
     source_row: Mapped[int | None] = mapped_column(Integer)
 
 
-class IdentifierCandidate(Base):
+class IdentifierCandidate(UserOwned, Base):
     __tablename__ = "identifier_candidates"
     __table_args__ = (UniqueConstraint("instrument_id", "kind", "value"),)
 
@@ -125,10 +195,10 @@ class IdentifierCandidate(Base):
 
 class PriceQuote(Base):
     __tablename__ = "price_quotes"
-    __table_args__ = (UniqueConstraint("instrument_id", "source", "price_date"),)
+    __table_args__ = (UniqueConstraint("security_id", "source", "price_date"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), index=True)
     source: Mapped[str] = mapped_column(String(50))
     source_ref: Mapped[str | None] = mapped_column(String(100))
     price: Mapped[Decimal] = mapped_column(DecimalText)
@@ -139,7 +209,7 @@ class PriceQuote(Base):
     fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
-class ImportRun(Base):
+class ImportRun(UserOwned, Base):
     __tablename__ = "import_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -165,13 +235,14 @@ class RefreshRun(Base):
     results: Mapped[list] = mapped_column(JSON, default=list)
 
 
-class PortfolioSnapshot(Base):
+class PortfolioSnapshot(UserOwned, Base):
     """One row per IST calendar date (upserted)."""
 
     __tablename__ = "portfolio_snapshots"
+    __table_args__ = (UniqueConstraint("user_id", "snapshot_date"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    snapshot_date: Mapped[date] = mapped_column(Date, unique=True)
+    snapshot_date: Mapped[date] = mapped_column(Date)
     total_value_paise: Mapped[int] = mapped_column(BigInteger)  # priced holdings only
     total_invested_paise: Mapped[int] = mapped_column(BigInteger)  # all open holdings
     invested_priced_paise: Mapped[int] = mapped_column(BigInteger)
@@ -186,7 +257,7 @@ class PortfolioSnapshot(Base):
         back_populates="snapshot", cascade="all, delete-orphan")
 
 
-class SnapshotAssetClass(Base):
+class SnapshotAssetClass(UserOwned, Base):
     __tablename__ = "snapshot_asset_classes"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -198,7 +269,7 @@ class SnapshotAssetClass(Base):
     snapshot: Mapped[PortfolioSnapshot] = relationship(back_populates="asset_classes")
 
 
-class SnapshotHolding(Base):
+class SnapshotHolding(UserOwned, Base):
     __tablename__ = "snapshot_holdings"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -216,17 +287,18 @@ class SnapshotHolding(Base):
     snapshot: Mapped[PortfolioSnapshot] = relationship(back_populates="holdings")
 
 
-class AppSetting(Base):
-    """One row per settings section (targets, drift, concentration, projection, emergency_fund)."""
+class AppSetting(UserOwned, Base):
+    """One row per user and settings section (targets, drift, concentration, projection, emergency_fund, ...)."""
 
     __tablename__ = "app_settings"
 
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     key: Mapped[str] = mapped_column(String(50), primary_key=True)
     value: Mapped[dict] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
 
-class ChangeLogEntry(Base):
+class ChangeLogEntry(UserOwned, Base):
     __tablename__ = "change_log"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -239,23 +311,24 @@ class ChangeLogEntry(Base):
     details: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
-class SectorAssignment(Base):
-    """Sector per instrument and origin. Effective sector: MANUAL > EXCEL > NSE."""
+class SectorAssignment(UserOwned, Base):
+    """The user's sector per instrument: EXCEL (holdings_fallback) or MANUAL. NSE sectors are in security_sectors.
+    Effective sector: MANUAL > EXCEL > NSE."""
 
     __tablename__ = "sector_assignments"
     __table_args__ = (UniqueConstraint("instrument_id", "origin"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
-    origin: Mapped[str] = mapped_column(String(10))  # NSE | EXCEL | MANUAL
+    origin: Mapped[str] = mapped_column(String(10))  # EXCEL | MANUAL
     sector: Mapped[str] = mapped_column(String(100))
     source: Mapped[str] = mapped_column(String(200))
     as_of: Mapped[date] = mapped_column(Date)
     note: Mapped[str | None] = mapped_column(Text)
 
 
-class InstrumentFact(Base):
-    """Fundamentals / fund facts. AUTO rows come from a data source, MANUAL rows from the user."""
+class InstrumentFact(UserOwned, Base):
+    """The user's MANUAL fundamentals / fund facts (with a source note). AUTO values are in security_facts."""
 
     __tablename__ = "instrument_facts"
     __table_args__ = (UniqueConstraint("instrument_id", "metric", "origin"),)
@@ -263,7 +336,7 @@ class InstrumentFact(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
     metric: Mapped[str] = mapped_column(String(40))
-    origin: Mapped[str] = mapped_column(String(10))  # AUTO | MANUAL
+    origin: Mapped[str] = mapped_column(String(10), default="MANUAL")  # MANUAL
     status: Mapped[str] = mapped_column(String(10), default="OK")  # OK | MISSING | REJECTED
     value: Mapped[Decimal | None] = mapped_column(DecimalText)
     value_text: Mapped[str | None] = mapped_column(String(300))
@@ -273,7 +346,38 @@ class InstrumentFact(Base):
     note: Mapped[str | None] = mapped_column(Text)
 
 
-class FundDisclosure(Base):
+class SecurityFact(Base):
+    """AUTO fundamentals / fund facts from a data source, shared by every holder of the security."""
+
+    __tablename__ = "security_facts"
+    __table_args__ = (UniqueConstraint("security_id", "metric"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), index=True)
+    metric: Mapped[str] = mapped_column(String(40))
+    origin: Mapped[str] = mapped_column(String(10), default="AUTO")
+    status: Mapped[str] = mapped_column(String(10), default="OK")  # OK | MISSING | REJECTED
+    value: Mapped[Decimal | None] = mapped_column(DecimalText)
+    value_text: Mapped[str | None] = mapped_column(String(300))
+    source: Mapped[str] = mapped_column(String(300))
+    as_of: Mapped[date | None] = mapped_column(Date)
+    fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    note: Mapped[str | None] = mapped_column(Text)
+
+
+class SecuritySector(Base):
+    """Sector from NSE index constituent lists (Industry), per security."""
+
+    __tablename__ = "security_sectors"
+
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), primary_key=True)
+    sector: Mapped[str] = mapped_column(String(100))
+    source: Mapped[str] = mapped_column(String(200))
+    as_of: Mapped[date] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(Text)
+
+
+class FundDisclosure(UserOwned, Base):
     """One uploaded portfolio disclosure (or index-weight file) for a fund and month."""
 
     __tablename__ = "fund_disclosures"
@@ -295,7 +399,7 @@ class FundDisclosure(Base):
                                                                cascade="all, delete-orphan")
 
 
-class DisclosureHolding(Base):
+class DisclosureHolding(UserOwned, Base):
     __tablename__ = "disclosure_holdings"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -317,7 +421,6 @@ class NewsItem(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     isin: Mapped[str] = mapped_column(String(20), index=True)
-    instrument_id: Mapped[int | None] = mapped_column(ForeignKey("instruments.id"))
     company: Mapped[str] = mapped_column(String(300))
     title: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(100))
@@ -358,13 +461,14 @@ class MacroValue(Base):
     source: Mapped[str] = mapped_column(String(300))
     as_of: Mapped[date | None] = mapped_column(Date)
     fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
-    status: Mapped[str] = mapped_column(String(10), default="OK")  # OK | UNAVAILABLE
+    status: Mapped[str] = mapped_column(String(20), default="OK")  # OK | UNAVAILABLE
     note: Mapped[str | None] = mapped_column(Text)
 
 
-class SectorSensitivity(Base):
+class SectorSensitivity(UserOwned, Base):
     __tablename__ = "sector_sensitivities"
 
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     sector: Mapped[str] = mapped_column(String(150), primary_key=True)
     tags: Mapped[list] = mapped_column(JSON, default=list)
     origin: Mapped[str] = mapped_column(String(10))  # STARTER | USER
@@ -372,7 +476,7 @@ class SectorSensitivity(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
 
-class LlmAnalysis(Base):
+class LlmAnalysis(UserOwned, Base):
     __tablename__ = "llm_analyses"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -393,7 +497,7 @@ class LlmAnalysis(Base):
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
 
 
-class LlmCall(Base):
+class LlmCall(UserOwned, Base):
     __tablename__ = "llm_calls"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -404,9 +508,10 @@ class LlmCall(Base):
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     ok: Mapped[bool] = mapped_column(Boolean)
     error: Mapped[str | None] = mapped_column(Text)
+    own_key: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())  # user's own key: not in the global cap
 
 
-class ThesisEntry(Base):
+class ThesisEntry(UserOwned, Base):
     """Append-only: a new version is a new row; rows are never updated or deleted."""
 
     __tablename__ = "thesis_entries"
@@ -424,7 +529,7 @@ class ThesisEntry(Base):
     linked_change_ids: Mapped[list] = mapped_column(JSON, default=list)
 
 
-class ThesisOptIn(Base):
+class ThesisOptIn(UserOwned, Base):
     __tablename__ = "thesis_optin"
 
     instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), primary_key=True)
@@ -432,12 +537,13 @@ class ThesisOptIn(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
 
-class Alert(Base):
+class Alert(UserOwned, Base):
     __tablename__ = "alerts"
+    __table_args__ = (UniqueConstraint("user_id", "dedupe_key"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     rule: Mapped[str] = mapped_column(String(40))
-    dedupe_key: Mapped[str] = mapped_column(String(200), unique=True)
+    dedupe_key: Mapped[str] = mapped_column(String(200))
     instrument_id: Mapped[int | None] = mapped_column(ForeignKey("instruments.id"))
     title: Mapped[str] = mapped_column(String(300))
     detail: Mapped[str] = mapped_column(Text)
@@ -445,9 +551,10 @@ class Alert(Base):
     read_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
-class AlertState(Base):
+class AlertState(UserOwned, Base):
     __tablename__ = "alert_state"
 
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[dict] = mapped_column(JSON)
 
@@ -469,7 +576,7 @@ class AnnualFinancial(Base):
     fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
-class PeerSet(Base):
+class PeerSet(UserOwned, Base):
     """User-maintained peers for one holding (max 8 NSE symbols). Nothing is seeded."""
 
     __tablename__ = "peer_sets"
@@ -495,7 +602,7 @@ class PeerMetric(Base):
     fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
-class QualitativeEntry(Base):
+class QualitativeEntry(UserOwned, Base):
     """Append-only, versioned qualitative notes per holding."""
 
     __tablename__ = "qualitative_entries"
@@ -538,11 +645,35 @@ class IntradayTick(Base):
     history (those stay end-of-day from price_quotes)."""
 
     __tablename__ = "intraday_ticks"
-    __table_args__ = (UniqueConstraint("instrument_id", "ts", "source"),)
+    __table_args__ = (UniqueConstraint("security_id", "ts", "source"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), index=True)
     ts: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)  # the quote's own time (bar start)
     price: Mapped[Decimal] = mapped_column(DecimalText)
     source: Mapped[str] = mapped_column(String(80))
     fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+# ---------------- Phase 6
+class PlatformSetting(Base):
+    """Platform-wide settings (admin only): news feeds, market holidays, live poll interval, AI platform limits."""
+
+    __tablename__ = "platform_settings"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
+
+
+class ImportPreview(UserOwned, Base):
+    """An uploaded workbook waiting for Confirm (one-shot token = its sha256). Kept in the DB, not on disk."""
+
+    __tablename__ = "import_previews"
+    __table_args__ = (UniqueConstraint("user_id", "token"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token: Mapped[str] = mapped_column(String(64))
+    file_name: Mapped[str] = mapped_column(String(300))
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)

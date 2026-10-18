@@ -70,7 +70,9 @@ def test_no_fabricated_values(session, workbook):
     assert by["ITC"]["pe"]["display_na"] == "N/A (not fetched yet)"
     assert by["MOSCHIP"]["market_cap"]["display_na"] == "N/A (not provided by source)"
     # rejected / missing values are stored without a value — nothing invented
-    bad = session.scalars(select(InstrumentFact).where(InstrumentFact.status != "OK")).all()
+    from app.models import SecurityFact
+
+    bad = session.scalars(select(SecurityFact).where(SecurityFact.status != "OK")).all()
     assert bad and all(f.value is None for f in bad)
 
 

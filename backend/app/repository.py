@@ -26,8 +26,21 @@ def insert_ignore(s: Session, model, rows: list[dict], conflict_cols: list[str])
         from sqlalchemy.dialects.postgresql import insert
     else:  # pragma: no cover - only SQLite/Postgres are supported
         raise NotImplementedError(f"insert_ignore: unsupported dialect {name}")
-    res = s.execute(insert(model).values(rows).on_conflict_do_nothing(index_elements=conflict_cols))
-    return res.rowcount or 0
+    from app.models import UserOwned
+
+    if issubclass(model, UserOwned):  # core INSERTs bypass the ORM stamp: set the owner explicitly
+        uid = s.info.get("user_id")
+        if uid is None:
+            from app.tenancy import TenantError
+
+            raise TenantError(f"insert into {model.__tablename__} without a user context")
+        rows = [{**r, "user_id": uid} for r in rows]
+    pk = list(model.__table__.primary_key.columns)
+    added = 0
+    for i in range(0, len(rows), 500):  # chunks stay under SQLite/Postgres bind-parameter limits
+        stmt = insert(model).values(rows[i:i + 500]).on_conflict_do_nothing(index_elements=conflict_cols)
+        added += len(s.execute(stmt.returning(*pk)).all())  # rowcount is -1 for multi-row inserts on psycopg
+    return added
 
 
 # instruments
@@ -98,23 +111,36 @@ def find_candidate(s: Session, instrument_id: int, kind: str, value: str) -> Ide
         IdentifierCandidate.value == value))
 
 
-# prices
-def latest_quotes(s: Session) -> dict[int, PriceQuote]:
-    """Newest quote per instrument (by market date, then fetch time)."""
-    out: dict[int, PriceQuote] = {}
-    for q in s.scalars(select(PriceQuote).order_by(PriceQuote.price_date, PriceQuote.fetched_at)):
-        out[q.instrument_id] = q
+# prices (global, per security; read through the user's instruments)
+def instrument_security_map(s: Session) -> dict[int, list[int]]:
+    """{security_id: [instrument ids]} for the session's user (all users in a system session)."""
+    out: dict[int, list[int]] = {}
+    for iid, sid in s.execute(select(Instrument.id, Instrument.security_id).where(Instrument.security_id.is_not(None))):
+        out.setdefault(sid, []).append(iid)
     return out
 
 
-def quote_on(s: Session, instrument_id: int, source: str, price_date) -> PriceQuote | None:
-    return s.scalar(select(PriceQuote).where(PriceQuote.instrument_id == instrument_id,
+def latest_quotes(s: Session) -> dict[int, PriceQuote]:
+    """Newest quote per instrument (by market date, then fetch time), via its security."""
+    sec_map = instrument_security_map(s)
+    out: dict[int, PriceQuote] = {}
+    if not sec_map:
+        return out
+    for q in s.scalars(select(PriceQuote).where(PriceQuote.security_id.in_(sec_map))
+                       .order_by(PriceQuote.price_date, PriceQuote.fetched_at)):
+        for iid in sec_map[q.security_id]:
+            out[iid] = q
+    return out
+
+
+def quote_on(s: Session, security_id: int, source: str, price_date) -> PriceQuote | None:
+    return s.scalar(select(PriceQuote).where(PriceQuote.security_id == security_id,
                                              PriceQuote.source == source, PriceQuote.price_date == price_date))
 
 
-def previous_quote(s: Session, instrument_id: int, source: str, before) -> PriceQuote | None:
+def previous_quote(s: Session, security_id: int, source: str, before) -> PriceQuote | None:
     return s.scalar(select(PriceQuote).where(
-        PriceQuote.instrument_id == instrument_id, PriceQuote.source == source, PriceQuote.price_date < before,
+        PriceQuote.security_id == security_id, PriceQuote.source == source, PriceQuote.price_date < before,
     ).order_by(PriceQuote.price_date.desc()).limit(1))
 
 
@@ -138,31 +164,31 @@ def _utc(dt: datetime) -> datetime:
 
 
 def add_ticks(s: Session, rows: list[dict]) -> int:
-    """rows: {instrument_id, ts, price, source, fetched_at}; duplicates (same bar) are ignored."""
+    """rows: {security_id, ts, price, source, fetched_at}; duplicates (same bar) are ignored."""
     rows = [{**r, "ts": _utc(r["ts"]), "fetched_at": _utc(r["fetched_at"])} for r in rows]
-    return insert_ignore(s, IntradayTick, rows, ["instrument_id", "ts", "source"])
+    return insert_ignore(s, IntradayTick, rows, ["security_id", "ts", "source"])
 
 
-def ticks_since(s: Session, since: datetime, instrument_ids: list[int] | None = None) -> list[IntradayTick]:
+def ticks_since(s: Session, since: datetime, security_ids: list[int] | None = None) -> list[IntradayTick]:
     q = select(IntradayTick).where(IntradayTick.ts >= _utc(since))
-    if instrument_ids is not None:
-        q = q.where(IntradayTick.instrument_id.in_(instrument_ids))
-    return list(s.scalars(q.order_by(IntradayTick.instrument_id, IntradayTick.ts)))
+    if security_ids is not None:
+        q = q.where(IntradayTick.security_id.in_(security_ids))
+    return list(s.scalars(q.order_by(IntradayTick.security_id, IntradayTick.ts)))
 
 
-def latest_tick_per_instrument(s: Session) -> dict[int, IntradayTick]:
-    newest = (select(IntradayTick.instrument_id, func.max(IntradayTick.ts).label("ts"))
-              .group_by(IntradayTick.instrument_id).subquery())
-    q = select(IntradayTick).join(newest, (IntradayTick.instrument_id == newest.c.instrument_id)
+def latest_tick_per_security(s: Session, security_ids: list[int]) -> dict[int, IntradayTick]:
+    newest = (select(IntradayTick.security_id, func.max(IntradayTick.ts).label("ts"))
+              .where(IntradayTick.security_id.in_(security_ids)).group_by(IntradayTick.security_id).subquery())
+    q = select(IntradayTick).join(newest, (IntradayTick.security_id == newest.c.security_id)
                                   & (IntradayTick.ts == newest.c.ts))
-    return {t.instrument_id: t for t in s.scalars(q)}
+    return {t.security_id: t for t in s.scalars(q)}
 
 
 def prune_ticks(s: Session, before: datetime) -> int:
     return s.execute(delete(IntradayTick).where(IntradayTick.ts < _utc(before))).rowcount or 0
 
 
-def close_before(s: Session, instrument_id: int, day) -> PriceQuote | None:
+def close_before(s: Session, security_id: int, day) -> PriceQuote | None:
     """The latest end-of-day quote dated before `day` (the previous session's close)."""
-    return s.scalar(select(PriceQuote).where(PriceQuote.instrument_id == instrument_id, PriceQuote.price_date < day)
+    return s.scalar(select(PriceQuote).where(PriceQuote.security_id == security_id, PriceQuote.price_date < day)
                     .order_by(PriceQuote.price_date.desc(), PriceQuote.fetched_at.desc()).limit(1))

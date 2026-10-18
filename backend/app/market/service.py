@@ -21,15 +21,15 @@ def default_providers() -> list[PriceProvider]:
     return [YFinanceProvider(), AmfiNavProvider()]
 
 
-def store_quote(s: Session, instrument_id: int, q: Quote) -> PriceQuote:
+def store_security_quote(s: Session, security_id: int, q: Quote) -> PriceQuote:
     prev_close, prev_date = q.previous_close, q.previous_date
     if prev_close is None:  # e.g. AMFI: use the previous cached NAV, if any
-        prior = repo.previous_quote(s, instrument_id, q.source, q.price_date)
+        prior = repo.previous_quote(s, security_id, q.source, q.price_date)
         if prior is not None:
             prev_close, prev_date = prior.price, prior.price_date
-    row = repo.quote_on(s, instrument_id, q.source, q.price_date)
+    row = repo.quote_on(s, security_id, q.source, q.price_date)
     if row is None:
-        row = PriceQuote(instrument_id=instrument_id, source=q.source, price_date=q.price_date)
+        row = PriceQuote(security_id=security_id, source=q.source, price_date=q.price_date)
         s.add(row)
     row.source_ref, row.price, row.currency = q.source_ref, q.price, q.currency
     row.previous_close, row.previous_date = prev_close, prev_date
@@ -37,16 +37,38 @@ def store_quote(s: Session, instrument_id: int, q: Quote) -> PriceQuote:
     return row
 
 
+def store_quote(s: Session, instrument_id: int, q: Quote) -> PriceQuote:
+    """Store a quote for one of the user's instruments (written to its shared security)."""
+    from app.services.securities import link
+
+    inst = repo.get_instrument(s, instrument_id)
+    if inst is None:
+        raise KeyError(instrument_id)
+    sec = inst.security or link(s, inst)
+    if sec is None:
+        raise ValueError(f"{inst.name}: no security (NSE symbol or confirmed AMFI scheme code) to price")
+    s.flush()
+    return store_security_quote(s, sec.id, q)
+
+
 def refresh_prices(s: Session, trigger: str = "manual", providers: list[PriceProvider] | None = None) -> dict:
-    providers = providers or default_providers()
+    """Fetch prices for the securities held by the session's user (a user request) or by anyone (system job).
+    Prices are shared: one fetch serves every holder. Results name securities only (symbol / scheme code)."""
     import time
 
-    from app.logging_config import event
+    from sqlalchemy import select
 
+    from app.logging_config import event
+    from app.models import Security
+    from app.services.securities import held_security_ids
+
+    providers = providers or default_providers()
     t0 = time.perf_counter()
     run = RefreshRun(trigger=trigger, started_at=utcnow())
     s.add(run)
-    refs = [InstrumentRef(i.id, i.asset_type, i.symbol, i.scheme_code, i.name) for i in repo.all_instruments(s)]
+    ids = held_security_ids(s)
+    secs = list(s.scalars(select(Security).where(Security.id.in_(ids)))) if ids else []
+    refs = [InstrumentRef(x.id, x.kind, x.symbol, x.scheme_code, x.symbol or x.scheme_code or x.key) for x in secs]
     results = []
     for p in providers:
         mine = [r for r in refs if p.supports(r)]
@@ -55,15 +77,15 @@ def refresh_prices(s: Session, trigger: str = "manual", providers: list[PricePro
         try:
             fetched = p.fetch(mine)
         except Exception as e:  # provider-level failure
-            fetched = {r.instrument_id: FetchError(f"{p.name}: {e}") for r in mine}
+            fetched = {r.security_id: FetchError(f"{p.name}: {e}") for r in mine}
         for r in mine:
-            res = fetched.get(r.instrument_id, FetchError("no result"))
+            res = fetched.get(r.security_id, FetchError("no result"))
             if isinstance(res, Quote):
-                store_quote(s, r.instrument_id, res)
-                results.append({"instrument_id": r.instrument_id, "name": r.name, "ok": True, "source": res.source,
+                store_security_quote(s, r.security_id, res)
+                results.append({"security_id": r.security_id, "name": r.name, "ok": True, "source": res.source,
                                 "price": str(res.price), "price_date": res.price_date.isoformat()})
             else:
-                results.append({"instrument_id": r.instrument_id, "name": r.name, "ok": False, "source": p.name,
+                results.append({"security_id": r.security_id, "name": r.name, "ok": False, "source": p.name,
                                 "error": res.message})
     from app.services.source_health import record
 
@@ -88,7 +110,8 @@ def refresh_prices(s: Session, trigger: str = "manual", providers: list[PricePro
     try:
         from app.services.snapshots import take_snapshot
 
-        snapshot = take_snapshot(s, trigger="scheduled" if trigger == "scheduled" else "refresh")
+        if s.info.get("user_id") is not None:  # a system run snapshots each user separately (jobs.snapshot_all)
+            snapshot = take_snapshot(s, trigger="scheduled" if trigger == "scheduled" else "refresh")
     except Exception:  # a snapshot problem must never fail the refresh itself
         event(log, "snapshot_after_refresh", logging.ERROR, exc_info=True, outcome="failed")
     return {"id": run.id, "snapshot": snapshot, "ok_count": run.ok_count, "error_count": run.error_count, "results": results,

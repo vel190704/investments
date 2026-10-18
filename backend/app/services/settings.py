@@ -55,7 +55,15 @@ from app.calc.framework import DEFAULT_RUBRIC, DEFAULT_SECTOR_RULES
 DEFAULTS.update({"rubric": dict(DEFAULT_RUBRIC), "sector_rules": {k: list(v) for k, v in DEFAULT_SECTOR_RULES.items()}})
 # Live intraday prices: off until the user turns it on (it makes a request every poll interval in market hours).
 # The holiday table starts empty: dates are entered by hand and verified against the NSE holiday list.
-DEFAULTS.update({"live": {"enabled": False, "poll_seconds": 60}, "market_holidays": {"holidays": []}})
+DEFAULTS.update({"live": {"enabled": False}})
+# Platform-wide sections (one row for everybody, admin-editable). Everything else in DEFAULTS is per user.
+PLATFORM_DEFAULTS: dict[str, dict] = {
+    "news": DEFAULTS.pop("news"),
+    "market_holidays": {"holidays": []},
+    "live_platform": {"poll_seconds": 60},
+    "llm_platform": {"global_monthly_cap": 200, "price_in_per_mtok": None, "price_out_per_mtok": None},
+}
+DEFAULTS.update(PLATFORM_DEFAULTS)
 HOLIDAY_NOTE = ("Enter exchange holidays by hand and verify them against the NSE holiday list (nseindia.com › "
                 "Resources › Exchange Communication › Holidays). Nothing is scraped. Until a holiday is entered, that "
                 "weekday is treated as a trading day.")
@@ -70,13 +78,8 @@ HEALTH_LABELS = {
     "sector_hhi": ("Sector HHI", "hhi"),
     "overlap": ("Largest pairwise fund overlap", "fraction"),
 }
-# Live intraday prices: off until the user turns it on (it makes a request every poll interval in market hours).
-# The holiday table starts empty: dates are entered by hand and verified against the NSE holiday list.
-DEFAULTS.update({"live": {"enabled": False, "poll_seconds": 60}, "market_holidays": {"holidays": []}})
-HOLIDAY_NOTE = ("Enter exchange holidays by hand and verify them against the NSE holiday list (nseindia.com › "
-                "Resources › Exchange Communication › Holidays). Nothing is scraped. Until a holiday is entered, that "
-                "weekday is treated as a trading day.")
-SECTIONS = tuple(DEFAULTS)
+PLATFORM_SECTIONS = tuple(PLATFORM_DEFAULTS)
+USER_SECTIONS = tuple(k for k in DEFAULTS if k not in PLATFORM_DEFAULTS)
 
 
 class SettingsError(ValueError):
@@ -209,17 +212,34 @@ def validate(section: str, value: dict) -> dict:
         effort = str(value.get("effort", "high"))
         if effort not in EFFORTS:
             raise SettingsError(f"effort must be one of {', '.join(EFFORTS)}")
+        # your own cap; the admin's per-user cap (users.ai_monthly_cap) and the global cap also apply
+        return {"outbound_enabled": bool(value.get("outbound_enabled", False)), "model": model,
+                "monthly_call_cap": cap, "weekly_job": bool(value.get("weekly_job", False)),
+                "effort": effort, "refusal_fallback": bool(value.get("refusal_fallback", False))}
+
+    if section == "llm_platform":
         def price(key, label):
             v = value.get(key)
             if v in (None, ""):
                 return None
             return _s(_dec(v, label, Decimal(0), Decimal(1000)))
 
-        return {"outbound_enabled": bool(value.get("outbound_enabled", False)), "model": model,
-                "monthly_call_cap": cap, "weekly_job": bool(value.get("weekly_job", False)),
-                "price_in_per_mtok": price("price_in_per_mtok", "input price"),
-                "price_out_per_mtok": price("price_out_per_mtok", "output price"),
-                "effort": effort, "refusal_fallback": bool(value.get("refusal_fallback", False))}
+        cap = value.get("global_monthly_cap", 200)
+        if not isinstance(cap, int) or isinstance(cap, bool) or not 0 <= cap <= 100000:
+            raise SettingsError("global monthly cap must be a whole number from 0 to 100,000")
+        return {"global_monthly_cap": cap, "price_in_per_mtok": price("price_in_per_mtok", "input price"),
+                "price_out_per_mtok": price("price_out_per_mtok", "output price")}
+
+    if section == "live_platform":
+        from app.calc.market_hours import POLL_MAX, POLL_MIN
+
+        try:
+            poll = int(value.get("poll_seconds", 60))
+        except (TypeError, ValueError):
+            raise SettingsError("poll interval must be a whole number of seconds") from None
+        if not POLL_MIN <= poll <= POLL_MAX:
+            raise SettingsError(f"poll interval must be between {POLL_MIN} and {POLL_MAX} seconds")
+        return {"poll_seconds": poll}
 
     if section == "news":
         feeds = value.get("feeds")
@@ -245,15 +265,7 @@ def validate(section: str, value: dict) -> dict:
                 "review_due": bool(value.get("review_due", True))}
 
     if section == "live":
-        from app.calc.market_hours import POLL_MAX, POLL_MIN
-
-        try:
-            poll = int(value.get("poll_seconds", 60))
-        except (TypeError, ValueError):
-            raise SettingsError("poll interval must be a whole number of seconds") from None
-        if not POLL_MIN <= poll <= POLL_MAX:
-            raise SettingsError(f"poll interval must be between {POLL_MIN} and {POLL_MAX} seconds")
-        return {"enabled": bool(value.get("enabled", False)), "poll_seconds": poll}
+        return {"enabled": bool(value.get("enabled", False))}
 
     if section == "market_holidays":
         rows, seen = [], set()
@@ -306,20 +318,35 @@ def validate(section: str, value: dict) -> dict:
     return out
 
 
+def _row(s: Session, section: str):
+    """The stored row: platform sections are shared; the rest belong to the session's user."""
+    from sqlalchemy import select
+
+    from app.models import PlatformSetting
+
+    if section in PLATFORM_SECTIONS:
+        return s.get(PlatformSetting, section)
+    return s.scalar(select(AppSetting).where(AppSetting.key == section))
+
+
 def get(s: Session, section: str) -> dict | None:
-    row = s.get(AppSetting, section)
+    row = _row(s, section)
     return row.value if row is not None else DEFAULTS[section]
 
 
 def is_set(s: Session, section: str) -> bool:
-    return s.get(AppSetting, section) is not None
+    return _row(s, section) is not None
 
 
 def put(s: Session, section: str, value: dict) -> dict:
+    """Callers must check that only an admin writes a platform section (see api/routes.py)."""
+    from app.models import PlatformSetting
+
     clean = validate(section, value)
-    row = s.get(AppSetting, section)
+    row = _row(s, section)
     if row is None:
-        s.add(AppSetting(key=section, value=clean))
+        s.add(PlatformSetting(key=section, value=clean) if section in PLATFORM_SECTIONS
+              else AppSetting(key=section, value=clean))
     else:
         row.value = clean
     s.flush()
@@ -329,14 +356,15 @@ def put(s: Session, section: str, value: dict) -> dict:
 def reset(s: Session, section: str) -> None:
     if section not in SECTIONS:
         raise SettingsError(f"unknown settings section {section!r}")
-    row = s.get(AppSetting, section)
+    row = _row(s, section)
     if row is not None:
         s.delete(row)
         s.flush()
 
 
 def all_settings(s: Session) -> dict:
-    return {sec: {"value": get(s, sec), "is_set": is_set(s, sec), "default": DEFAULTS[sec]} for sec in SECTIONS}
+    return {sec: {"value": get(s, sec), "is_set": is_set(s, sec), "default": DEFAULTS[sec],
+                  "platform": sec in PLATFORM_SECTIONS} for sec in SECTIONS}
 
 
 # typed accessors used by calculations

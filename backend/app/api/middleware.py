@@ -50,8 +50,10 @@ def install(app: FastAPI) -> None:
                 status = response.status_code
                 level = (logging.ERROR if status >= 500 else logging.WARNING if status >= 400
                          else logging.DEBUG if request.url.path in QUIET_PATHS else logging.INFO)
-                event(log, "http_request", level, method=request.method, path=request.url.path, status=status,
-                      duration_ms=round((time.perf_counter() - t0) * 1000))
+                log.log(level, "http_request", extra={
+                    "user_id": str(getattr(request.state, "user_id", "-")),
+                    "fields": {"method": request.method, "path": request.url.path, "status": status,
+                               "duration_ms": round((time.perf_counter() - t0) * 1000)}})
             response.headers["X-Request-ID"] = rid
             return response
         finally:

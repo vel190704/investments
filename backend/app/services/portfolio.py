@@ -50,10 +50,19 @@ def inst_class(i: Instrument) -> str:
 
 
 def _last_errors(session: Session) -> dict[int, str]:
-    runs = repo.refresh_runs(session, 1)
-    if not runs:
-        return {}
-    return {r["instrument_id"]: r["error"] for r in runs[0].results if not r.get("ok")}
+    """Latest refresh outcome per security the user holds, mapped to the user's instruments (failures only)."""
+    sec_map = repo.instrument_security_map(session)
+    seen: set[int] = set()
+    out: dict[int, str] = {}
+    for run in repo.refresh_runs(session, 5):
+        for r in run.results:
+            sid = r.get("security_id")
+            if sid in sec_map and sid not in seen:
+                seen.add(sid)
+                if not r.get("ok"):
+                    for iid in sec_map[sid]:
+                        out[iid] = r["error"]
+    return out
 
 
 def load_rows(session: Session) -> tuple[list[HoldingRow], dict]:

@@ -78,7 +78,7 @@ def test_ticks_never_feed_eod_quotes_or_snapshots(session, workbook):
 
 def test_no_writes_outside_market_hours_except_manual(session, workbook):
     book(session, workbook)
-    st.put(session, "live", {"enabled": True, "poll_seconds": 60})
+    st.put(session, "live", {"enabled": True})
     live.mark_viewer(0.0)
     for now in (CLOSED_NOW, SAT, datetime(2026, 10, 19, 9, 14, 59, tzinfo=IST)):
         assert live.poll_cycle(session, now, fetch=fake_fetch())["ran"] is False
@@ -91,11 +91,11 @@ def test_no_writes_outside_market_hours_except_manual(session, workbook):
     assert ticks(session) == 32
 
 
-def test_scheduler_requires_enabled_and_a_viewer_and_respects_interval(session, workbook):
+def test_scheduler_requires_a_viewer_and_respects_interval(session, workbook):
+    """The poller is shared: it runs while any user with live prices on is looking (GET /live marks a viewer only
+    when that user's toggle is on; see test_live_route_marks_viewer_only_when_enabled)."""
     book(session, workbook)
     f = fake_fetch()
-    assert live.scheduler_tick(session, OPEN_NOW, mono=100.0, fetch=f)["reason"].startswith("live prices are off")
-    st.put(session, "live", {"enabled": True, "poll_seconds": 60})
     assert live.scheduler_tick(session, OPEN_NOW, mono=100.0, fetch=f)["reason"] == "nobody is viewing live prices"
     live.mark_viewer(100.0)
     assert live.scheduler_tick(session, OPEN_NOW, mono=100.0, fetch=f)["ran"] is True
@@ -108,7 +108,7 @@ def test_scheduler_requires_enabled_and_a_viewer_and_respects_interval(session, 
 
 def test_backoff_after_failed_cycles(session, workbook):
     book(session, workbook)
-    st.put(session, "live", {"enabled": True, "poll_seconds": 60})
+    st.put(session, "live", {"enabled": True})
 
     def broken(symbols):
         raise TimeoutError("read timed out")
@@ -136,8 +136,8 @@ def test_retention_keeps_14_days(session, workbook):
     lt = session.scalar(select(Instrument).where(Instrument.symbol == "LT"))
     old = datetime(2026, 10, 4, 5, 0, tzinfo=UTC)    # 15 days before OPEN_NOW
     kept = datetime(2026, 10, 6, 5, 0, tzinfo=UTC)   # 13 days before
-    session.add_all([IntradayTick(instrument_id=lt.id, ts=old, price=D("1"), source="t"),
-                     IntradayTick(instrument_id=lt.id, ts=kept, price=D("1"), source="t")])
+    session.add_all([IntradayTick(security_id=lt.security_id, ts=old, price=D("1"), source="t"),
+                     IntradayTick(security_id=lt.security_id, ts=kept, price=D("1"), source="t")])
     session.flush()
     assert live.prune(session, OPEN_NOW) == 1
     assert [t.ts.replace(tzinfo=UTC) for t in session.scalars(select(IntradayTick))] == [kept]
@@ -145,7 +145,7 @@ def test_retention_keeps_14_days(session, workbook):
 
 def test_view_partial_failure_stale_badge_and_totals(session, workbook):
     book(session, workbook)
-    st.put(session, "live", {"enabled": True, "poll_seconds": 60})
+    st.put(session, "live", {"enabled": True})
     live.poll_cycle(session, OPEN_NOW, fetch=fake_fetch(prices={"LT": "120"}, fail=("ITC",)))
     v = live.live_view(session, OPEN_NOW)
     assert v["market"]["open"] and v["market"]["label"] == "Market open"
@@ -178,20 +178,22 @@ def test_view_when_closed_shows_market_closed_and_last_close(session, workbook):
 
 def test_settings_validation():
     with pytest.raises(st.SettingsError):
-        st.validate("live", {"enabled": True, "poll_seconds": 10})
+        st.validate("live_platform", {"poll_seconds": 10})
     with pytest.raises(st.SettingsError):
-        st.validate("live", {"enabled": True, "poll_seconds": 301})
-    assert st.validate("live", {"enabled": 1, "poll_seconds": "30"}) == {"enabled": True, "poll_seconds": 30}
+        st.validate("live_platform", {"poll_seconds": 301})
+    assert st.validate("live_platform", {"poll_seconds": "30"}) == {"poll_seconds": 30}
+    assert st.validate("live", {"enabled": 1, "poll_seconds": "30"}) == {"enabled": True}  # per user: on/off only
+    assert "live_platform" in st.PLATFORM_SECTIONS and "market_holidays" in st.PLATFORM_SECTIONS
     with pytest.raises(st.SettingsError):
         st.validate("market_holidays", {"holidays": [{"date": "2026-13-01", "name": "x"}]})
     with pytest.raises(st.SettingsError):
         st.validate("market_holidays", {"holidays": [{"date": "2026-10-20", "name": ""}]})
     assert st.validate("market_holidays", {"holidays": [{"date": "2026-11-09", "name": "B"}, {"date": "2026-10-20", "name": "A"}]}) == \
         {"holidays": [{"date": "2026-10-20", "name": "A"}, {"date": "2026-11-09", "name": "B"}]}
-    assert st.DEFAULTS["live"]["enabled"] is False and st.DEFAULTS["market_holidays"] == {"holidays": []}
+    assert st.DEFAULTS["live"] == {"enabled": False} and st.DEFAULTS["market_holidays"] == {"holidays": []}
 
 
-def test_live_route_marks_viewer(tmp_path, monkeypatch):
+def test_live_route_marks_viewer_only_when_enabled(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     from app import db
@@ -200,7 +202,10 @@ def test_live_route_marks_viewer(tmp_path, monkeypatch):
     db.configure(f"sqlite:///{tmp_path / 'live.db'}")
     with TestClient(app) as c:
         r = c.get("/api/live")
-        assert r.status_code == 200 and r.json()["rows"] == [] and live.STATE.last_viewer_mono is not None
+        assert r.status_code == 200 and r.json()["rows"] == [] and live.STATE.last_viewer_mono is None
+        c.put("/api/settings/live", json={"enabled": True})
+        c.get("/api/live")
+        assert live.STATE.last_viewer_mono is not None
 
 
 def test_tick_queries_are_timezone_safe(session, workbook):

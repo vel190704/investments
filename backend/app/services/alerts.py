@@ -22,13 +22,17 @@ def evaluate_alerts(s: Session) -> dict:
 
     rules = st.get(s, "alerts")
     since = utcnow() - timedelta(days=30)
-    news = [{"id": n.id, "instrument_id": n.instrument_id, "company": n.company, "title": n.title,
+    from app.services.news import tracked_companies
+
+    mine = {t.isin: t for t in tracked_companies(s)[0]}  # news is shared: only this user's companies
+    news = [{"id": n.id, "instrument_id": mine[n.isin].instrument_id, "company": n.company, "title": n.title,
              "category": n.category, "source": n.source}
-            for n in s.scalars(select(NewsItem).where(NewsItem.published_at >= since))]
+            for n in s.scalars(select(NewsItem).where(NewsItem.published_at >= since,
+                                                      NewsItem.isin.in_(list(mine) or ["-"])))]
     dims = {d["key"]: d["level"] for d in health(s)["dimensions"] if d["key"] in ("company", "sector", "overlap")}
     stale = [d for d in list_disclosures(s) if d["in_use"] and d["stale"]]
     reviews = review_due(s)
-    row = s.get(AlertState, STATE_KEY)
+    row = s.scalar(select(AlertState).where(AlertState.key == STATE_KEY))
     new, state = evaluate(rules, news, dims, stale, reviews, row.value if row else None, today_ist().isoformat())
     existing = set(s.scalars(select(Alert.dedupe_key)))
     created = 0

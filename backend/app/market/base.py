@@ -10,7 +10,7 @@ from typing import Protocol
 
 @dataclass(frozen=True)
 class InstrumentRef:
-    instrument_id: int
+    security_id: int  # the shared security being priced
     asset_type: str
     symbol: str | None
     scheme_code: str | None
