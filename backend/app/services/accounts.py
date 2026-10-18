@@ -56,11 +56,13 @@ def list_users(s: Session) -> list[dict]:
                     "ai_enabled": u.ai_enabled or u.role == "admin", "ai_monthly_cap": u.ai_monthly_cap,
                     "ai_calls_this_month": calls.get(u.id, 0),
                     "ai_tokens_this_month": {"input": tokens.get(u.id, (0, 0))[0], "output": tokens.get(u.id, (0, 0))[1]},
-                    "own_key": bool(u.own_key_encrypted), "rows": row_counts(s, u.id)})
+                    "own_key": bool(u.own_key_encrypted), "rows": row_counts(s, u.id),
+                    "disabled": u.disabled_at is not None})
     pending = sorted(invited - {u["email"] for u in out})
     return out + [{"id": None, "email": e, "role": "user", "invited": True, "signed_in": False, "created_at": None,
                    "last_active_at": None, "ai_enabled": False, "ai_monthly_cap": None, "ai_calls_this_month": 0,
-                   "ai_tokens_this_month": {"input": 0, "output": 0}, "own_key": False, "rows": {}} for e in pending]
+                   "ai_tokens_this_month": {"input": 0, "output": 0}, "own_key": False, "rows": {},
+                   "disabled": False} for e in pending]
 
 
 def invite(s: Session, email: str, by_user_id: int, send_email: bool = True) -> dict:

@@ -43,6 +43,7 @@ class User(Base):
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     ai_monthly_cap: Mapped[int] = mapped_column(Integer, default=10)
     own_key_encrypted: Mapped[str | None] = mapped_column(Text)  # Fernet token; never returned or logged
+    disabled_at: Mapped[datetime | None] = mapped_column(UTCDateTime())  # kill switch: set = every request refused
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     last_active_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
@@ -690,3 +691,17 @@ class Feedback(UserOwned, Base):
     text: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
     done_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class AdminAudit(Base):
+    """Every admin action and kill switch: who (numeric id), what, on whom (numeric id), when. Never emails or any
+    figures (`details` holds flags and counts; an invited email only as a short hash). Global, append-only."""
+
+    __tablename__ = "admin_audit"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
+    admin_user_id: Mapped[int | None] = mapped_column(Integer)  # no FK: the entry outlives a deleted account
+    action: Mapped[str] = mapped_column(String(40))
+    target_user_id: Mapped[int | None] = mapped_column(Integer)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)

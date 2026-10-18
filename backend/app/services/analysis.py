@@ -84,6 +84,10 @@ def _api_key(s: Session) -> tuple[str | None, bool]:
 
 def gate(s: Session) -> str | None:
     """Reason the LLM can't be called for this user, or None."""
+    from app.services import ops
+
+    if ops.switches(s)["ai_off"]:
+        return ops.MESSAGES["ai_off"]
     cfg = st.get(s, "llm")
     user = _user(s)
     if user is not None and not (user.ai_enabled or user.role == "admin"):
@@ -127,6 +131,10 @@ def test_connection(s: Session, model: str | None = None, api_key: str | None = 
            "refusal_fallback": fallback, "sent": PING_PROMPT, "input_tokens": 0, "output_tokens": 0,
            "latency_ms": None, "error": None, "reply": None}
     try:
+        from app.services import ops
+
+        if ops.switches(s)["ai_off"]:
+            raise LLMUnavailable(ops.MESSAGES["ai_off"])
         user = _user(s)
         if user is not None and not (user.ai_enabled or user.role == "admin"):
             raise LLMUnavailable("AI analysis is not enabled for your account (ask the admin).")

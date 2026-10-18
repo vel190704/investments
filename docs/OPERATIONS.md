@@ -170,3 +170,25 @@ or asleep at 23:30:
 
 A restart within the same day (e.g. a deploy at 23:35 that interrupted the job) just takes the missing snapshot on start.
 Long outages show up as gaps, so you can see them on the History page and in **Sources › health**.
+
+## 3. Kill switches (Admin page › Kill switches)
+
+All switches are stored in the database and read on every request. They take effect on the next request, on every
+instance, with **no redeploy**. Admins (`ADMIN_EMAILS`) are never locked out, so you can always switch them back.
+
+| switch | effect | people see |
+|---|---|---|
+| **New sign-ins off** | Nobody can sign in for the first time: no new accounts, no first sign-in of an invited email. People who already signed in keep working. | "New sign-ins are paused by the admin. Please try again later." |
+| **Pause everyone except admins** | Every non-admin request is refused (HTTP 503). Data untouched. `/api/health` still answers, so monitors don't alarm. | "The app is paused by the admin for maintenance. Please try again later." |
+| **AI off for everyone** | No AI call for anyone (analysis, connection test, category suggestions, weekly job), whatever the per-person setting, own key or cap. | "AI analysis is switched off for everyone by the admin." |
+| **Disable one person** (People table › disable) | Every request of that person is refused (HTTP 403); their data is kept. You can't disable yourself. | "Your account has been disabled by the admin." |
+
+Note that a signed-in person's browser keeps its Supabase session. The switches act in the backend, so they apply at
+once anyway. To also end sessions everywhere, sign the person out or rotate the JWT keys in Supabase (LAUNCH.md
+incident runbook).
+
+**Audit log.** Every switch change and every admin action goes to `admin_audit`: invites, removed invites, AI
+settings, disabling, deletions, and also self-service account deletions. The Admin page lists the latest 100. Each
+entry has the time, the admin's numeric id, the action and the target's numeric id. Details hold flags and counts
+only; an invited email appears only as a 12-character hash. No addresses or figures. The same entries go to the log
+as `admin_action` lines.

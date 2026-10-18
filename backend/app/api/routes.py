@@ -1174,10 +1174,14 @@ def delete_me(body: DeleteMeIn, user: CurrentUser = Depends(current_user)):
     from app.db import session_scope
     from app.services.accounts import delete_user_data
 
+    from app.services import ops
+
     if body.confirm.strip().lower() != user.email.lower():
         raise HTTPException(422, "type your email exactly to confirm")
     with session_scope(system=True) as s:
-        return delete_user_data(s, user.id, remove_account=True)
+        res = delete_user_data(s, user.id, remove_account=True)
+        ops.audit(s, None, "account_self_deleted", target_user_id=user.id, rows=sum(res["deleted_rows"].values()))
+        return res
 
 
 class OwnKeyIn(BaseModel):
@@ -1215,19 +1219,25 @@ class InviteIn(BaseModel):
 
 @router.post("/admin/invites", status_code=201)
 def admin_invite(body: InviteIn, session: Session = Depends(get_admin_session)):
+    from app.services import ops
     from app.services.accounts import AccountError, invite
 
     try:
-        return invite(session, body.email, session.info["admin_user_id"], body.send_email)
+        res = invite(session, body.email, session.info["admin_user_id"], body.send_email)
+        ops.audit(session, session.info["admin_user_id"], "invite_added", email_ref=ops.email_ref(res["email"]),
+                  email_sent=res["invite_email_sent"])
+        return res
     except AccountError as e:
         raise HTTPException(422, str(e)) from None
 
 
 @router.delete("/admin/invites/{email}")
 def admin_uninvite(email: str, session: Session = Depends(get_admin_session)):
+    from app.services import ops
     from app.services.accounts import uninvite
 
     uninvite(session, email, session.info["admin_user_id"])
+    ops.audit(session, session.info["admin_user_id"], "invite_removed", email_ref=ops.email_ref(email))
     return {"removed": True}
 
 
@@ -1238,10 +1248,14 @@ class UserAiIn(BaseModel):
 
 @router.put("/admin/users/{user_id:int}/ai")
 def admin_user_ai(user_id: int, body: UserAiIn, session: Session = Depends(get_admin_session)):
+    from app.services import ops
     from app.services.accounts import AccountError, set_ai
 
     try:
-        return set_ai(session, user_id, body.ai_enabled, body.ai_monthly_cap)
+        res = set_ai(session, user_id, body.ai_enabled, body.ai_monthly_cap)
+        ops.audit(session, session.info["admin_user_id"], "user_ai_changed", target_user_id=user_id,
+                  enabled=res["ai_enabled"], cap=res["ai_monthly_cap"])
+        return res
     except AccountError as e:
         raise HTTPException(404, str(e)) from None
 
@@ -1263,10 +1277,15 @@ def admin_delete_user(user_id: int, body: AdminDeleteIn, session: Session = Depe
         raise HTTPException(422, "use Account › Delete my account for yourself")
     if body.confirm.strip().lower() != u.email.lower():
         raise HTTPException(422, "type the user's email exactly to confirm")
+    from app.services import ops
+
     try:
-        return delete_user_data(session, user_id, remove_account=body.remove_account)
+        res = delete_user_data(session, user_id, remove_account=body.remove_account)
     except AccountError as e:
         raise HTTPException(404, str(e)) from None
+    ops.audit(session, session.info["admin_user_id"], "user_deleted", target_user_id=user_id,
+              account_removed=body.remove_account, rows=sum(res["deleted_rows"].values()))
+    return res
 
 
 # ---------------- Phase 6c: feedback
@@ -1329,3 +1348,40 @@ def admin_feedback_done(fid: int, body: FeedbackDoneIn, session: Session = Depen
         return set_done(session, fid, body.done, session.info["admin_user_id"])
     except FeedbackError as e:
         raise HTTPException(e.status, str(e)) from None
+
+
+# ---------------- Phase 6c: kill switches (admin, audit-logged; read on every request: no redeploy needed)
+@router.get("/admin/ops")
+def admin_ops(session: Session = Depends(get_admin_session)):
+    from app.services import ops
+
+    return {"switches": ops.switches(session), "messages": ops.MESSAGES, "audit": ops.recent_audit(session)}
+
+
+class OpsIn(BaseModel):
+    model_config = {"extra": "forbid"}  # a typo must not look like a switch that was set
+
+    new_signins_off: bool | None = None
+    members_paused: bool | None = None
+    ai_off: bool | None = None
+
+
+@router.put("/admin/ops")
+def admin_ops_set(body: OpsIn, session: Session = Depends(get_admin_session)):
+    from app.services import ops
+
+    return {"switches": ops.set_switches(session, body.model_dump(exclude_none=True), session.info["admin_user_id"])}
+
+
+class DisabledIn(BaseModel):
+    disabled: bool
+
+
+@router.put("/admin/users/{user_id:int}/disabled")
+def admin_user_disabled(user_id: int, body: DisabledIn, session: Session = Depends(get_admin_session)):
+    from app.services import ops
+
+    try:
+        return ops.set_disabled(session, user_id, body.disabled, session.info["admin_user_id"])
+    except ops.OpsError as e:
+        raise HTTPException(404 if "no such" in str(e) else 422, str(e)) from None

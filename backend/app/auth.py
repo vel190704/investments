@@ -121,10 +121,15 @@ def resolve_user(email: str, subject: str | None, dev: bool = False) -> CurrentU
             user = s.scalar(select(User).where(User.auth_subject == subject))
         if user is None:
             user = s.scalar(select(User).where(func.lower(User.email) == email))
+        from app.services import ops
+
+        sw = ops.switches(s)
         if user is None:
             invited = s.get(AllowedEmail, email) is not None
             if not (dev or invited or email in admins):
                 raise AuthError(403, "this email is not invited to the app")
+            if sw["new_signins_off"] and email not in admins:
+                raise AuthError(403, ops.MESSAGES["new_signins_off"])
             is_admin = email in admins or (dev and email == get_settings().dev_user_email.lower())
             from app import repository as repo
 
@@ -138,6 +143,14 @@ def resolve_user(email: str, subject: str | None, dev: bool = False) -> CurrentU
         else:
             if not dev and user.role != "admin" and email not in admins and s.get(AllowedEmail, email) is None:
                 raise AuthError(403, "your invitation was removed")
+            is_admin = user.role == "admin" or email in admins
+            if not is_admin:
+                if user.disabled_at is not None:
+                    raise AuthError(403, ops.MESSAGES["disabled"])
+                if sw["members_paused"]:
+                    raise AuthError(503, ops.MESSAGES["members_paused"])
+                if sw["new_signins_off"] and subject and not user.auth_subject:  # first sign-in of this account
+                    raise AuthError(403, ops.MESSAGES["new_signins_off"])
             if subject and not user.auth_subject:
                 user.auth_subject = subject
             if email in admins and user.role != "admin":

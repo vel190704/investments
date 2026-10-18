@@ -211,6 +211,10 @@ def _body(method: str, path: str, ids: dict, a_book):
         kw["json"] = {"confirm": BOB}
     elif p == "/api/feedback":
         kw["json"] = {"text": "hello", "page": "/"}
+    elif p == "/api/admin/ops":
+        kw["json"] = {"members_paused": True, "ai_off": True}
+    elif p.endswith("/disabled"):
+        kw["json"] = {"disabled": True}
     elif p.startswith("/api/admin/feedback/"):
         kw["json"] = {"done": True}
     elif p == "/api/llm/test":
