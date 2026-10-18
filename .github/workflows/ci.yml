@@ -52,6 +52,8 @@ jobs:
         run: make test-postgres
       - name: Whole backend suite on Postgres
         run: make test-all-postgres
+      - name: User context through PgBouncer in transaction mode (like Supabase's transaction pooler)
+        run: make test-pooler
 
   docker:
     runs-on: ubuntu-latest

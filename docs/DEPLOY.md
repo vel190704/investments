@@ -57,6 +57,25 @@ psql "<admin connection string from Supabase › Connect>" -v app_password='<new
 - Check by hand in the Supabase SQL editor:
   `select rolname, rolsuper, rolbypassrls from pg_roles where rolname = 'investments_app';` → `false, false`.
 
+### Which connection string for what
+
+Supabase › **Connect** offers a direct connection (port 5432; may be IPv6-only), a **session pooler** (port 5432,
+IPv4) and a **transaction pooler** (port 6543, IPv4). Always connect as `investments_app` (never `postgres`) except
+where noted.
+
+| use | connection | why |
+|---|---|---|
+| Backend app (`DATABASE_URL` on Render) | **Session pooler** (recommended) or transaction pooler | Both are safe for user isolation: the per-request user is set per *transaction* (`set_config(..., true)` = `SET LOCAL`) at the start of every transaction, and the job lock is a transaction-level advisory lock. Tested through PgBouncer in transaction mode (`make test-pooler`). The session pooler is simplest because it also suits the release step. |
+| Release step (`alembic upgrade head`, Render pre-deploy) | **Session pooler** or direct, never the transaction pooler | migrations are DDL in one long transaction. If the app uses the transaction pooler, set a separate `MIGRATE_DATABASE_URL` (session pooler) and make the pre-deploy command `DATABASE_URL="$MIGRATE_DATABASE_URL" alembic upgrade head`. |
+| One-time data move (`sqlite_to_postgres`, from your machine) | **Session pooler** (or direct if your network has IPv6) | it migrates and then copies in one long transaction |
+| Creating the app role (`app_role.sql`, as `postgres`) | direct or session pooler, user `postgres` | administrative, once |
+| CI and local tests | local containers only | never a Supabase URL |
+
+Behind a transaction pooler, anything set at *session* level would leak into other clients' transactions on the
+same server connection (demonstrated by `test_negative_control_session_level_settings_do_leak_through_the_pooler`).
+The app never does that. It also sets both `app.user_id` and `app.system` at the start of every transaction, so a
+polluted pooled connection cannot change what it sees (tested).
+
 ## 3. Email for magic-link sign-in (SMTP)
 
 Sign-in emails are sent by Supabase Auth. Supabase's built-in email sender is meant for trying things out: it

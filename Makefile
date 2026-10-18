@@ -7,7 +7,7 @@ BIN     := $(VENV)/bin
 FILE    ?= data/personal_investment_tracker_clean.xlsx
 
 
-.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals logs logs-errors pg-up test-postgres test-all-postgres
+.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals logs logs-errors pg-up test-postgres test-all-postgres test-pooler
 
 help:
 	@echo "make setup      install backend (venv) + frontend (npm) dependencies"
@@ -22,6 +22,7 @@ help:
 	@echo "make pg-up      start a throwaway local Postgres in Docker for tests (127.0.0.1:55432)"
 	@echo "make test-postgres      Postgres-only tests (RLS, advisory locks, isolation on Postgres, data move)"
 	@echo "make test-all-postgres  the whole backend suite on Postgres"
+	@echo "make test-pooler        user context through PgBouncer in transaction mode (Docker Compose)"
 	@echo "make logs       follow logs/app.log (Ctrl-C to stop)"
 	@echo "make logs-errors  follow WARNING and above only"
 
@@ -107,3 +108,11 @@ test-postgres:
 test-all-postgres:
 	cd backend && TEST_ALL_ON_POSTGRES=1 TEST_POSTGRES_URL=$(PG_TEST_URL) .venv/bin/python -m pytest -q -p no:warnings \
 		--deselect tests/test_migrations.py
+
+# Postgres behind PgBouncer in transaction mode (like Supabase's port-6543 pooler); test-only stack.
+POOLER_COMPOSE := docker compose -f backend/tests/pooler/docker-compose.yml -p invpooler
+test-pooler:
+	$(POOLER_COMPOSE) up -d --wait
+	cd backend && TEST_POOLER_URL=postgresql+psycopg://pooler_app:pooler_app_test@127.0.0.1:56432/pooltest \
+		TEST_POOLER_DIRECT_URL=postgresql+psycopg://pooler_app:pooler_app_test@127.0.0.1:55433/pooltest \
+		.venv/bin/python -m pytest -q -p no:warnings tests/test_pooler.py

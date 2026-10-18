@@ -1,8 +1,9 @@
 """Background jobs run ONCE globally (not per user): market data for the union of securities any user holds;
 per-user steps (snapshots, alerts, starter tags, weekly AI) loop users, each in its own user-bound session.
 
-`job_lock(name)` makes sure two app instances never run the same job at once: a Postgres advisory lock
-(pg_try_advisory_lock on a dedicated connection) or, on SQLite (single local instance), a process lock.
+`job_lock(name)` makes sure two app instances never run the same job at once: a Postgres transaction-level advisory
+lock (pg_try_advisory_xact_lock in a transaction held open on a dedicated connection; pooler-safe) or, on SQLite
+(single local instance), a process lock.
 """
 
 from __future__ import annotations
@@ -34,14 +35,12 @@ def job_lock(name: str) -> Iterator[bool]:
     """Yields True if this process holds the lock (run the job), False if another holder has it (skip)."""
     engine = get_engine()
     if engine.dialect.name == "postgresql":
-        with engine.connect() as conn:
-            got = bool(conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": lock_key(name)}).scalar())
-            try:
-                yield got
-            finally:
-                if got:
-                    conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key(name)})
-                conn.commit()
+        # A TRANSACTION-level advisory lock held in an open transaction for the job's duration: safe behind a
+        # transaction pooler (the open transaction pins one server connection; the lock ends with it). A session
+        # lock would stay on a pooled server connection that other clients then use.
+        with engine.connect() as conn, conn.begin():
+            got = bool(conn.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": lock_key(name)}).scalar())
+            yield got
         return
     with _local_guard:
         lk = _local_locks.setdefault(name, threading.Lock())
