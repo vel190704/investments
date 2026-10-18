@@ -24,6 +24,8 @@ export default function TermsPage() {
             <li>Your email address (to sign you in) and when you were last active.</li>
             <li>What you upload or enter: transactions, holdings, monthly plan, settings, targets, emergency-fund
               figures, thesis journal and notes, peers, fund disclosure files, and AI analyses you request.</li>
+            <li>Feedback you send (text and the page it was sent from), stored with your numeric user id. Only the
+              admin reads it; it is never written to logs or error reports, and it is deleted with your account.</li>
             <li>Shared market data (prices, NAVs, fundamentals, news headlines, macro values). It contains nothing
               about you.</li>
             <li>Technical logs with a numeric user id and request ids, never your financial figures, file contents,

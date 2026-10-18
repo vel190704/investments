@@ -677,3 +677,16 @@ class ImportPreview(UserOwned, Base):
     file_name: Mapped[str] = mapped_column(String(300))
     content: Mapped[bytes] = mapped_column(LargeBinary)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class Feedback(UserOwned, Base):
+    """'Send feedback' text (at most 2,000 characters). Only the admin page shows it; it is never logged or sent to
+    Sentry (app/services/feedback.py). Deleted with the account like every per-user table."""
+
+    __tablename__ = "feedback"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    page: Mapped[str] = mapped_column(String(200))  # the app page path it was sent from, e.g. /holdings
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
+    done_at: Mapped[datetime | None] = mapped_column(UTCDateTime())

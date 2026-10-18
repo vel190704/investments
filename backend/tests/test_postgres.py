@@ -24,6 +24,23 @@ def test_migrations_apply_on_postgres_without_drift(pg_url):
     assert rls == {"transactions": True, "app_settings": True, "price_quotes": False}
 
 
+def test_every_per_user_table_has_forced_row_level_security_and_the_policy(pg_url):
+    """A new per-user table (e.g. feedback) must get RLS in its migration; this catches one that didn't."""
+    from app.services.accounts import _user_tables
+
+    db.configure(pg_url)
+    db.init_db()
+    with db.get_engine().connect() as conn:
+        rows = {r.relname: (r.relrowsecurity, r.relforcerowsecurity, r.policies) for r in conn.execute(text(
+            "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity, "
+            "(SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid AND p.polname = 'tenant_isolation') AS policies "
+            "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r'"))}
+    per_user = {t.name for t in _user_tables()}
+    assert "feedback" in per_user
+    assert {t: rows[t] for t in per_user if rows[t] != (True, True, 1)} == {}
+    assert {t for t, (on, _f, _p) in rows.items() if not on} == set()  # global tables: RLS on (no Data API reads)
+
+
 def test_row_level_security_isolates_users_for_a_non_superuser_role(pg_url):
     """Defence in depth: even raw SQL without any WHERE clause sees only the current user's rows."""
     db.configure(pg_url)

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMe } from "@/components/auth-gate";
 import { ErrorBox, Loading, Notice, PageHeader, Section } from "@/components/common";
-import { Field } from "@/components/form";
+import { Field, Select } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiDelete, apiPost, apiPut, errorText, useApi } from "@/lib/api";
@@ -53,9 +53,66 @@ export default function AdminPageView() {
               </table>
             </div>
           </Section>
+          <FeedbackList />
         </div>
       )}
     </>
+  );
+}
+
+type FeedbackItem = { id: number; user_id: number; email: string; page: string; text: string; created_at: string;
+                      done_at: string | null };
+type FeedbackPage = { items: FeedbackItem[]; pages: string[]; open: number };
+
+function FeedbackList() {
+  const [filter, setFilter] = useState({ status: "open", page: "", since: "", until: "" });
+  const qs = new URLSearchParams(Object.entries(filter).filter(([, v]) => v)).toString();
+  const { data, error, reload } = useApi<FeedbackPage>(`/admin/feedback?${qs}`);
+  const [msg, setMsg] = useState<string | null>(null);
+  const mark = async (id: number, done: boolean) => {
+    try {
+      await apiPut(`/admin/feedback/${id}/done`, { done });
+      setMsg(null);
+      reload();
+    } catch (e) {
+      setMsg(errorText(e));
+    }
+  };
+  const set = (k: keyof typeof filter) => (e: { target: { value: string } }) => setFilter({ ...filter, [k]: e.target.value });
+  return (
+    <Section title="Feedback" aside={data ? `${data.open} open` : undefined}>
+      <div className="mb-3 flex flex-wrap items-end gap-2 text-xs">
+        <Field label="Status">
+          <Select value={filter.status} onChange={set("status")}>
+            <option value="open">open</option><option value="done">done</option><option value="all">all</option>
+          </Select>
+        </Field>
+        <Field label="Page">
+          <Select value={filter.page} onChange={set("page")}>
+            <option value="">all pages</option>
+            {data?.pages.map((p) => <option key={p} value={p}>{p}</option>)}
+          </Select>
+        </Field>
+        <Field label="From (IST)"><Input type="date" value={filter.since} onChange={set("since")} /></Field>
+        <Field label="To (IST)"><Input type="date" value={filter.until} onChange={set("until")} /></Field>
+      </div>
+      {error && <ErrorBox message={error} />}
+      {msg && <ErrorBox message={msg} />}
+      {data && data.items.length === 0 && <p className="text-sm text-muted-foreground">No feedback for this filter.</p>}
+      <ul className="flex flex-col gap-2">
+        {data?.items.map((f) => (
+          <li key={f.id} className="rounded-md border border-border p-2 text-sm">
+            <div className="mb-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+              <span>{formatDateTime(f.created_at)}</span><span>{f.page}</span><span>user {f.user_id} · {f.email}</span>
+              {f.done_at && <span>done {formatDateTime(f.done_at)}</span>}
+              <span className="flex-1" />
+              <button className="underline" onClick={() => mark(f.id, !f.done_at)}>{f.done_at ? "reopen" : "mark as done"}</button>
+            </div>
+            <p className="whitespace-pre-wrap break-words">{f.text}</p>
+          </li>
+        ))}
+      </ul>
+    </Section>
   );
 }
 

@@ -119,6 +119,11 @@ def _bob_objects(c, tmp_path, b_book) -> dict:
     assert c.post("/api/snapshots", headers=H).status_code == 200
     r = c.post("/api/import/preview", headers=H, files={"file": ("w.xlsx", b_book.read_bytes())})
     ids["token"] = r.json()["token"]
+    assert c.post("/api/feedback", headers=H, json={"text": f"{MARK} feedback", "page": "/holdings"}).status_code == 201
+    with db.session_scope(user_id=bob) as s:
+        from app.models import Feedback
+
+        ids["fid"] = s.scalar(select(Feedback.id))
     ids["user_id"] = bob
     return ids
 
@@ -143,7 +148,7 @@ def _url(path: str, ids: dict) -> str:
             return str(ids["alert"])
         table = {"iid": ids["iid"], "cid": ids["cid"], "txn_id": ids["txn"], "did": ids["did"],
                  "user_id": ids["user_id"], "section": "targets", "field": "sector", "metric": "roce",
-                 "key": "repo_rate", "sector": "Construction", "email": BOB}
+                 "key": "repo_rate", "sector": "Construction", "email": BOB, "fid": ids["fid"]}
         if name not in table:
             raise AssertionError(f"add an isolation id for path parameter {name!r} ({path})")
         return str(table[name])
@@ -204,6 +209,10 @@ def _body(method: str, path: str, ids: dict, a_book):
         kw["json"] = {"ai_enabled": True, "ai_monthly_cap": 999}
     elif p.startswith("/api/admin/users/") and method == "DELETE":
         kw["json"] = {"confirm": BOB}
+    elif p == "/api/feedback":
+        kw["json"] = {"text": "hello", "page": "/"}
+    elif p.startswith("/api/admin/feedback/"):
+        kw["json"] = {"done": True}
     elif p == "/api/llm/test":
         kw["json"] = {}
     elif p == "/api/compare":

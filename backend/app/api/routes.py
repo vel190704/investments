@@ -1267,3 +1267,65 @@ def admin_delete_user(user_id: int, body: AdminDeleteIn, session: Session = Depe
         return delete_user_data(session, user_id, remove_account=body.remove_account)
     except AccountError as e:
         raise HTTPException(404, str(e)) from None
+
+
+# ---------------- Phase 6c: feedback
+class FeedbackIn(BaseModel):
+    text: str
+    page: str | None = None
+
+
+@router.get("/feedback/info")
+def feedback_info(_user: CurrentUser = Depends(current_user)):
+    from app.services.feedback import MAX_CHARS, NOTE, RATE_PER_DAY, RATE_PER_HOUR
+
+    return {"max_chars": MAX_CHARS, "note": NOTE, "per_hour": RATE_PER_HOUR, "per_day": RATE_PER_DAY}
+
+
+@router.post("/feedback", status_code=201)
+def send_feedback(body: FeedbackIn, user: CurrentUser = Depends(current_user)):
+    """Store feedback. Its own transaction, so a failure at commit is caught here too: the text never reaches an
+    error log or Sentry (app/services/feedback.py)."""
+    from app.db import session_scope
+    from app.services.feedback import FeedbackError, FeedbackStoreError, submit
+
+    try:
+        with session_scope(user_id=user.id) as s:
+            return submit(s, user.id, body.page, body.text)
+    except FeedbackError as e:
+        raise HTTPException(e.status, str(e)) from None
+    except FeedbackStoreError:
+        raise HTTPException(503, "Could not store your feedback just now; please try again later.") from None
+    except Exception:  # commit failed: same treatment, never chained
+        raise HTTPException(503, "Could not store your feedback just now; please try again later.") from None
+
+
+@router.get("/admin/feedback")
+def admin_feedback(page: str | None = None, since: str | None = None, until: str | None = None,
+                   status: str = "open", session: Session = Depends(get_admin_session)):
+    from datetime import date as _date
+
+    from app.services.feedback import list_all
+
+    if status not in ("open", "done", "all"):
+        raise HTTPException(422, "status must be open, done or all")
+    try:
+        d1 = _date.fromisoformat(since) if since else None
+        d2 = _date.fromisoformat(until) if until else None
+    except ValueError:
+        raise HTTPException(422, "dates must be YYYY-MM-DD") from None
+    return list_all(session, page=page, since=d1, until=d2, status=status)
+
+
+class FeedbackDoneIn(BaseModel):
+    done: bool = True
+
+
+@router.put("/admin/feedback/{fid:int}/done")
+def admin_feedback_done(fid: int, body: FeedbackDoneIn, session: Session = Depends(get_admin_session)):
+    from app.services.feedback import FeedbackError, set_done
+
+    try:
+        return set_done(session, fid, body.done, session.info["admin_user_id"])
+    except FeedbackError as e:
+        raise HTTPException(e.status, str(e)) from None

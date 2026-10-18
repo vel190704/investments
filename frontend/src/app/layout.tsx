@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AdvancedPageNote, AuthGate } from "@/components/auth-gate";
+import { FeedbackButton } from "@/components/feedback";
 import { Nav } from "@/components/nav";
 import "./globals.css";
 
@@ -27,6 +28,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             Personal analytics tool, not investment advice. Figures are historical or derived from the stated
             sources and dates; scenarios are mathematical illustrations, not predictions. Nothing here places orders.
             {" "}<a className="underline" href="/terms">Terms &amp; data</a>
+            <FeedbackButton />
           </footer>
         </div>
         </AuthGate>
