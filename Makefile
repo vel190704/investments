@@ -28,7 +28,7 @@ help:
 setup: hooks
 	test -d $(VENV) || $(PY) -m venv $(VENV)
 	$(BIN)/pip install -q --upgrade pip
-	$(BIN)/pip install -q -r backend/requirements.txt
+	$(BIN)/pip install -q -r backend/requirements-dev.txt
 	cd frontend && npm install
 
 # Local development uses the fake local user explicitly; anything else requires sign-in (fail closed).

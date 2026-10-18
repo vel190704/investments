@@ -61,6 +61,17 @@ in-app transaction form) is the only input for holdings and transactions.** See 
 - Market data sits behind the `PriceProvider` interface; results are cached in `price_quotes`.
   Pages read from the DB; only refresh jobs hit the network.
 
+## Deployment (Phase 6b)
+- Backend: `backend/Dockerfile` (python:3.12-slim, non-root, `/api/health` checks the DB). Release step
+  `alembic upgrade head`. Configuration only from environment variables (names in `.env.example`, values never in
+  git). Dependencies are pinned in `requirements.txt` (runtime) and `requirements-dev.txt` (tests).
+- Internet-facing: CORS only `CORS_ORIGINS` / `CORS_ORIGIN_REGEX` (never `*`), security headers on every response,
+  `MAX_REQUEST_BYTES`, rate limits in `app/api/limits.py` (failed sign-ins per IP; uploads, AI tests, invites per
+  session). One backend instance.
+- CI: `.github/workflows/ci.yml` (`make check`, `make test-postgres`, `make test-all-postgres`, Docker build). Keep it
+  secret-free. Preview deployments never get production credentials (docs/DEPLOY.md §1).
+- Python: the image and CI use 3.12; keep code 3.12-compatible even though local dev runs 3.14.
+
 ## Users and isolation (Phase 6)
 - Per-user tables inherit `UserOwned` (models.py). Never filter by user_id by hand: sessions carry the user and
   `app/tenancy.py` adds `user_id = :uid` to every ORM SELECT/UPDATE/DELETE (incl. `session.get`) and stamps new rows.

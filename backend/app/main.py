@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.middleware import install as install_middleware
+from app.api.middleware import install as install_middleware, install_cors
 from app.api.routes import router
 from app.config import get_settings
 from app.db import init_db, session_scope
@@ -81,4 +81,5 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Personal Investment Dashboard", version="0.1.0", lifespan=lifespan)
 install_middleware(app)
+install_cors(app)  # outermost: refusals (413/429) carry CORS headers too
 app.include_router(router)

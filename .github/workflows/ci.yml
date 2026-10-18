@@ -1,0 +1,64 @@
+# Runs on every push and pull request. Branch protection on `main` requires the "checks" and "docker" jobs, and
+# Render deploys `main` only after they pass (docs/DEPLOY.md). No secrets are needed: tests use a throwaway
+# Postgres service container and mock every network/LLM call.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: localtest
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PG_TEST_URL: postgresql+psycopg://postgres:localtest@127.0.0.1:55432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"  # same as the Docker image
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: |
+          python -m venv backend/.venv
+          backend/.venv/bin/pip install -q -r backend/requirements-dev.txt
+          cd frontend && npm ci
+      - name: make check (backend tests, frontend tests, lint, typecheck)
+        run: make check
+      - name: Postgres-only tests (RLS as the production role, advisory locks, cross-user attack, data move)
+        run: make test-postgres
+      - name: Whole backend suite on Postgres
+        run: make test-all-postgres
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the backend image
+        run: docker build -t investments-backend:ci backend
+      - name: Image runs as a non-root user
+        run: test "$(docker run --rm investments-backend:ci id -u)" != "0"

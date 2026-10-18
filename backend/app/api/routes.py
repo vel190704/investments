@@ -26,6 +26,17 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 @router.get("/health")
 def health():
+    """Public liveness + database check for uptime monitors. Reveals nothing else."""
+    from fastapi.responses import JSONResponse
+    from sqlalchemy import text as sa_text
+
+    from app.db import get_engine
+
+    try:
+        with get_engine().connect() as conn:
+            conn.execute(sa_text("SELECT 1"))
+    except Exception:
+        return JSONResponse({"status": "unavailable"}, status_code=503)
     return {"status": "ok"}
 
 

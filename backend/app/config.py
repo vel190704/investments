@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     supabase_jwt_audience: str = "authenticated"
     supabase_service_role_key: str = ""  # optional, server-side only: sends invite emails from the admin page
     field_encryption_key: str = ""  # Fernet key for users' own AI keys (optional feature)
+    # internet-facing (6b)
+    cors_origins: str = ""  # comma-separated exact origins, e.g. the Vercel production URL
+    cors_origin_regex: str = ""  # preview service only: e.g. ^https://investments-[a-z0-9-]+-you\.vercel\.app$
+    max_request_bytes: int = 10 * 1024 * 1024
+    rate_limits_enabled: bool = True
     # Logging (app/logging_config.py)
     log_level: str = "INFO"
     log_format: str = "kv"  # kv (key=value lines) | json

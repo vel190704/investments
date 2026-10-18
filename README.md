@@ -100,6 +100,9 @@ make migrate        # apply migrations now (backs up first)
 - **Local development** (`make dev` sets `ENV=development DEV_AUTH=1`): no sign-in; you are `DEV_USER_EMAIL`
   (default `owner@localhost`, an admin). An existing single-user database is upgraded in place
   (migration 0008) and all its data becomes this user's.
+- **Deployment** (Vercel + Render + Supabase, CI, preview vs production, rollback, custom domain):
+  [docs/DEPLOY.md](docs/DEPLOY.md). The backend ships as a Docker image (`backend/Dockerfile`, non-root,
+  health check); every push and pull request runs CI (`.github/workflows/ci.yml`).
 - **Everywhere else** sign-in is required (fail closed): unset or unknown `ENV` counts as production,
   `DEV_AUTH=1` outside development/test refuses to start, and without Supabase settings the app
   refuses to start. Sign-in is by email magic link; only invited emails get in
@@ -206,7 +209,11 @@ make check          # everything the pre-commit hook runs: backend tests, fronte
 make pg-up          # throwaway local Postgres in Docker (tests only)
 make test-postgres  # Postgres-only tests: RLS, advisory locks, cross-user attack, data move
 make test-all-postgres  # the whole backend suite on Postgres
+docker build -t investments-backend backend   # the deployable backend image
 ```
+
+CI (GitHub Actions) runs `make check`, the Postgres tests and the Docker build on every push and pull
+request; deployments wait for it (docs/DEPLOY.md §8, §11).
 
 `make` runs recipes with `bash -euo pipefail`, so a failing step can never be hidden behind a
 pipe. Network and LLM calls are always mocked in tests. Parser regression tests replay trimmed

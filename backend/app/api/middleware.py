@@ -32,6 +32,56 @@ def validation_summary(errors: list[dict]) -> list[dict]:
             for e in errors]
 
 
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",  # the API serves data, never pages
+    "Cross-Origin-Resource-Policy": "same-site",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+def _secure(response, request: Request) -> None:
+    from app.auth import DEV_ENVS, effective_env
+
+    for k, v in SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)
+    if request.url.path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    if effective_env() not in DEV_ENVS:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+
+
+def _guard(request: Request) -> JSONResponse | None:
+    """Size limit and rate limits, before any work is done. Returns the refusal, or None to continue."""
+    from app.api.limits import AUTH_FAIL_LIMIT, AUTH_FAIL_WINDOW_S, LIMITER, client_ip, rule_for, session_key
+    from app.config import get_settings
+
+    st = get_settings()
+    try:
+        length = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        length = 0
+    if length > st.max_request_bytes:
+        return JSONResponse({"detail": f"Request too large (limit {st.max_request_bytes // (1024 * 1024)} MB)",
+                             "request_id": REQUEST_ID.get()}, status_code=413)
+    if not st.rate_limits_enabled:
+        return None
+    wait = LIMITER.blocked("auth_fail", client_ip(request), AUTH_FAIL_LIMIT, AUTH_FAIL_WINDOW_S)
+    rule = rule_for(request)
+    if wait is None and rule is not None:
+        key = session_key(request)
+        wait = LIMITER.blocked(rule.name, key, rule.limit, rule.window_s)
+        if wait is None:
+            LIMITER.hit(rule.name, key, rule.window_s)
+    if wait is not None:
+        event(log, "rate_limited", logging.WARNING, path=request.url.path, retry_after_s=wait)
+        return JSONResponse({"detail": f"Too many requests; try again in {wait} s", "request_id": REQUEST_ID.get()},
+                            status_code=429, headers={"Retry-After": str(wait)})
+    return None
+
+
 def install(app: FastAPI) -> None:
     @app.middleware("http")
     async def request_context(request: Request, call_next):
@@ -39,6 +89,11 @@ def install(app: FastAPI) -> None:
         token = REQUEST_ID.set(rid)
         t0 = time.perf_counter()
         try:
+            refusal = None if request.url.path in QUIET_PATHS else _guard(request)
+            if refusal is not None:
+                refusal.headers["X-Request-ID"] = rid
+                _secure(refusal, request)
+                return refusal
             try:
                 response = await call_next(request)
             except Exception:
@@ -54,7 +109,12 @@ def install(app: FastAPI) -> None:
                     "user_id": str(getattr(request.state, "user_id", "-")),
                     "fields": {"method": request.method, "path": request.url.path, "status": status,
                                "duration_ms": round((time.perf_counter() - t0) * 1000)}})
+            if response.status_code == 401:
+                from app.api.limits import AUTH_FAIL_WINDOW_S, LIMITER, client_ip
+
+                LIMITER.hit("auth_fail", client_ip(request), AUTH_FAIL_WINDOW_S)
             response.headers["X-Request-ID"] = rid
+            _secure(response, request)
             return response
         finally:
             REQUEST_ID.reset(token)
@@ -74,3 +134,19 @@ def install(app: FastAPI) -> None:
                   detail=exc.detail if isinstance(exc.detail, str) else jsonable_encoder(exc.detail))
         return JSONResponse({"detail": exc.detail, "request_id": REQUEST_ID.get()}, status_code=exc.status_code,
                             headers=getattr(exc, "headers", None))
+
+
+def install_cors(app: FastAPI) -> None:
+    """Only the configured frontend origins may call the API from a browser. Bearer tokens, no cookies."""
+    from fastapi.middleware.cors import CORSMiddleware
+
+    from app.config import get_settings
+
+    st = get_settings()
+    origins = [o.strip().rstrip("/") for o in st.cors_origins.split(",") if o.strip()]
+    if "*" in origins:
+        raise RuntimeError("CORS_ORIGINS must list exact origins, not *")
+    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_origin_regex=st.cors_origin_regex or None,
+                       allow_credentials=False, allow_methods=["GET", "POST", "PUT", "DELETE"],
+                       allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+                       expose_headers=["X-Request-ID", "Content-Disposition", "Retry-After"], max_age=600)
