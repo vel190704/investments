@@ -328,3 +328,35 @@ feature branch ──push──▶ GitHub Actions: checks + docker      Vercel: 
   Stack frames keep file, line and function only. A synthetic event full of private values is checked in the
   tests. In the Sentry project settings, also turn on "Data Scrubber" and "Prevent Storing of IP Addresses" as a
   second layer.
+
+## 16. Smoke test after each deploy (`make smoke`)
+
+Run it after every deploy of the **preview** backend (and therefore before promoting to production). It signs in
+two dummy accounts and checks, against the real deployment, that one never sees the other's data:
+1. B uploads a workbook with a freshly generated canary holding (unique symbol, name and note).
+2. A calls every GET route with B's real ids, the Excel export, the status endpoints (source health, market
+   status), the admin endpoints (must be 403) and deliberate error requests (B's ids in POST/PUT/DELETE).
+3. No response may contain the canary and nothing may answer 5xx.
+4. B's canary is removed again.
+
+One-time setup, preview project only:
+1. Supabase **preview** › Authentication › Users › **Add user** › *Create new user* twice (e.g.
+   `smoke-a@<your domain>`, `smoke-b@<your domain>`) with long random passwords, "Auto Confirm User" on. Password
+   sign-in uses the Email provider, which is on by default. Never create password users in production.
+2. In the **preview** app, sign in as admin › Admin › invite both emails (don't enable AI for them). Account A
+   must not be an admin.
+3. Keep the passwords in your password manager.
+
+Each run, from your machine (values only in your shell):
+```bash
+export SMOKE_TARGET=preview
+export SMOKE_SUPABASE_URL=<preview project URL>  SMOKE_SUPABASE_ANON_KEY=<preview publishable key>
+export SMOKE_PRODUCTION_SUPABASE_URL=<production project URL>   # optional guard: refuses if they match
+export SMOKE_A_EMAIL=... SMOKE_B_EMAIL=...
+read -rs SMOKE_A_PASSWORD && export SMOKE_A_PASSWORD
+read -rs SMOKE_B_PASSWORD && export SMOKE_B_PASSWORD
+make smoke URL=https://<preview backend>
+```
+It prints `smoke: N requests as A checked for B's canary; PASS` and exits 0, or lists each problem and exits 1.
+Check out the same commit that is deployed, because the route list comes from the code. The same logic runs in
+the test suite (`tests/test_smoke_tool.py`), including a run where it catches a deliberately leaking app.

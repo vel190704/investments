@@ -7,7 +7,7 @@ BIN     := $(VENV)/bin
 FILE    ?= data/personal_investment_tracker_clean.xlsx
 
 
-.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals logs logs-errors pg-up test-postgres test-all-postgres test-pooler
+.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals logs logs-errors pg-up test-postgres test-all-postgres test-pooler smoke
 
 help:
 	@echo "make setup      install backend (venv) + frontend (npm) dependencies"
@@ -23,6 +23,7 @@ help:
 	@echo "make test-postgres      Postgres-only tests (RLS, advisory locks, isolation on Postgres, data move)"
 	@echo "make test-all-postgres  the whole backend suite on Postgres"
 	@echo "make test-pooler        user context through PgBouncer in transaction mode (Docker Compose)"
+	@echo "make smoke URL=...      cross-user smoke test against a DEPLOYED preview backend (docs/DEPLOY.md §16)"
 	@echo "make logs       follow logs/app.log (Ctrl-C to stop)"
 	@echo "make logs-errors  follow WARNING and above only"
 
@@ -116,3 +117,8 @@ test-pooler:
 	cd backend && TEST_POOLER_URL=postgresql+psycopg://pooler_app:pooler_app_test@127.0.0.1:56432/pooltest \
 		TEST_POOLER_DIRECT_URL=postgresql+psycopg://pooler_app:pooler_app_test@127.0.0.1:55433/pooltest \
 		.venv/bin/python -m pytest -q -p no:warnings tests/test_pooler.py
+
+# After each deploy, against the PREVIEW backend: two dummy accounts, a canary, no cross-user visibility.
+smoke:
+	@test -n "$(URL)" || { echo "usage: make smoke URL=https://<preview backend>"; exit 2; }
+	cd backend && .venv/bin/python -m app.tools.smoke --url "$(URL)"

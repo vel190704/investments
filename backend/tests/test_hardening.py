@@ -109,3 +109,12 @@ def test_cors_allows_only_configured_origins(monkeypatch):
     monkeypatch.setattr(st, "cors_origins", "*")
     with pytest.raises(RuntimeError, match="exact origins"):
         install_cors(FastAPI())
+
+
+def test_api_docs_are_not_published_when_deployed(monkeypatch):
+    import app.main as main
+
+    monkeypatch.setattr(get_settings(), "env", "production")
+    assert main._docs_enabled() is False
+    monkeypatch.setattr(get_settings(), "env", "test")
+    assert main._docs_enabled() is True  # the app object is built at import; the decision is what we test

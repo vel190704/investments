@@ -82,7 +82,14 @@ async def lifespan(app: FastAPI):
         sched.shutdown(wait=False)
 
 
-app = FastAPI(title="Personal Investment Dashboard", version="0.1.0", lifespan=lifespan)
+def _docs_enabled() -> bool:
+    from app.auth import DEV_ENVS, effective_env
+
+    return effective_env() in DEV_ENVS  # no public API map (/docs, /openapi.json) when deployed
+
+
+app = FastAPI(title="Personal Investment Dashboard", version="0.1.0", lifespan=lifespan,
+              **({} if _docs_enabled() else {"docs_url": None, "redoc_url": None, "openapi_url": None}))
 install_middleware(app)
 install_cors(app)  # outermost: refusals (413/429) carry CORS headers too
 app.include_router(router)
