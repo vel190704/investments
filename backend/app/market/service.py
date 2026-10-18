@@ -39,6 +39,11 @@ def store_quote(s: Session, instrument_id: int, q: Quote) -> PriceQuote:
 
 def refresh_prices(s: Session, trigger: str = "manual", providers: list[PriceProvider] | None = None) -> dict:
     providers = providers or default_providers()
+    import time
+
+    from app.logging_config import event
+
+    t0 = time.perf_counter()
     run = RefreshRun(trigger=trigger, started_at=utcnow())
     s.add(run)
     refs = [InstrumentRef(i.id, i.asset_type, i.symbol, i.scheme_code, i.name) for i in repo.all_instruments(s)]
@@ -75,13 +80,17 @@ def refresh_prices(s: Session, trigger: str = "manual", providers: list[PricePro
     run.error_count = len(results) - run.ok_count
     run.finished_at = utcnow()
     s.flush()
+    event(log, "price_refresh", logging.INFO if not run.error_count else logging.WARNING, trigger=trigger,
+          requested=len(results), ok=run.ok_count, failed=run.error_count,
+          duration_ms=round((time.perf_counter() - t0) * 1000),
+          failures=[f"{r['name']}: {r.get('error', '')[:120]}" for r in results if not r["ok"]][:10])
     snapshot = None
     try:
         from app.services.snapshots import take_snapshot
 
         snapshot = take_snapshot(s, trigger="scheduled" if trigger == "scheduled" else "refresh")
     except Exception:  # a snapshot problem must never fail the refresh itself
-        log.exception("Snapshot after refresh failed")
+        event(log, "snapshot_after_refresh", logging.ERROR, exc_info=True, outcome="failed")
     return {"id": run.id, "snapshot": snapshot, "ok_count": run.ok_count, "error_count": run.error_count, "results": results,
             "finished_at": run.finished_at.isoformat()}
 

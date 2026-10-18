@@ -27,9 +27,14 @@ def _frame(df, rows) -> dict:
 def fetch_payload(symbol: str) -> dict:
     import yfinance as yf
 
-    t = yf.Ticker(f"{symbol}.NS")
-    info = t.info or {}
-    return {"info": {k: info.get(k) for k in INFO_KEYS},
-            "income": _frame(t.income_stmt, ROWS["income"]),
-            "cashflow": _frame(t.cashflow, ROWS["cashflow"]),
-            "balance": _frame(t.balance_sheet, ROWS["balance"])}
+    from app.net.outbound import outbound
+
+    with outbound("yfinance statements", "finance.yahoo.com (yfinance)", symbol=symbol) as rec:
+        t = yf.Ticker(f"{symbol}.NS")
+        info = t.info or {}
+        out = {"info": {k: info.get(k) for k in INFO_KEYS},
+               "income": _frame(t.income_stmt, ROWS["income"]),
+               "cashflow": _frame(t.cashflow, ROWS["cashflow"]),
+               "balance": _frame(t.balance_sheet, ROWS["balance"])}
+        rec["income_lines"] = len(out["income"])
+    return out

@@ -6,11 +6,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.middleware import install as install_middleware
 from app.api.routes import router
 from app.config import get_settings
 from app.db import init_db, session_scope
+from app.logging_config import configure_logging, event
 
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 log = logging.getLogger(__name__)
 
 
@@ -29,13 +31,17 @@ def _startup_refresh() -> None:
                 return
             res = catch_up(s, today_ist())
             if res["ran"]:
-                log.info("Start-up catch-up: gaps %s, refresh %s", res["gaps_recorded"], res["refresh"])
+                r = res["refresh"] or {}
+                event(log, "startup_catchup", gaps=len(res["gaps_recorded"]), gap_dates=res["gaps_recorded"],
+                      refresh_ok=r.get("ok_count"), refresh_errors=r.get("error_count"))
                 return
             res = refresh_if_stale(s, get_settings().startup_refresh_max_age_hours)
         if res:
-            log.info("Start-up refresh: %s ok, %s errors", res["ok_count"], res["error_count"])
+            event(log, "startup_refresh", refresh_ok=res["ok_count"], refresh_errors=res["error_count"])
+        else:
+            event(log, "startup_refresh", skipped="prices are fresh")
     except Exception:
-        log.exception("Start-up refresh failed")
+        event(log, "startup_refresh", logging.ERROR, exc_info=True, outcome="failed")
 
 
 def ensure_first_snapshot() -> dict | None:
@@ -79,4 +85,5 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Personal Investment Dashboard", version="0.1.0", lifespan=lifespan)
+install_middleware(app)
 app.include_router(router)

@@ -11,16 +11,19 @@ import { cn } from "@/lib/utils";
 export default function SectorsPageView() {
   const { data: d, error, loading, reload } = useApi<SectorsPage>("/sectors");
   const [msg, setMsg] = useState<string | null>(null);
+  const [fail, setFail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function refresh() {
     setBusy(true);
     try {
       const r = await apiPost<{ summary: string; errors: string[] }>("/sectors/refresh");
+      setFail(null);
       setMsg(r.summary + (r.errors.length ? ` — ${r.errors.join("; ")}` : ""));
       reload();
     } catch (e) {
-      setMsg(errorText(e));
+      setMsg(null);
+      setFail(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -35,6 +38,7 @@ export default function SectorsPageView() {
         actions={<Button variant="outline" disabled={busy} onClick={refresh}>{busy ? "Refreshing…" : "Refresh classifications"}</Button>}
       />
       {msg && <Notice>{msg}</Notice>}
+      {fail && <ErrorBox message={fail} />}
       {error && <ErrorBox message={error} />}
       {loading && !d && <Loading />}
       {d && (

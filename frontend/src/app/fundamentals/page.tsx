@@ -21,16 +21,19 @@ export default function FundamentalsPage() {
   const { data, error, loading, reload } = useApi<Fundamentals>("/fundamentals");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [fail, setFail] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ iid: number; cell: FactCell; name: string } | null>(null);
 
   async function refresh() {
     setBusy(true);
     try {
       const r = await apiPost<{ summary: string; errors: string[] }>("/fundamentals/refresh");
+      setFail(null);
       setMsg(r.summary + (r.errors.length ? ` — ${r.errors.join("; ")}` : ""));
       reload();
     } catch (e) {
-      setMsg(errorText(e));
+      setMsg(null);
+      setFail(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -68,6 +71,7 @@ export default function FundamentalsPage() {
         actions={<Button variant="outline" disabled={busy} onClick={refresh}>{busy ? "Fetching…" : "Refresh from Yahoo Finance"}</Button>}
       />
       {msg && <Notice>{msg}</Notice>}
+      {fail && <ErrorBox message={fail} />}
       {error && <ErrorBox message={error} />}
       {loading && !data && <Loading />}
       {editing && <ManualForm e={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); }} />}

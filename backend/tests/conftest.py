@@ -6,6 +6,8 @@ import openpyxl
 import pytest
 
 os.environ["SCHEDULER_ENABLED"] = "false"
+import tempfile  # noqa: E402
+os.environ.setdefault("LOG_DIR", tempfile.mkdtemp(prefix="investments-test-logs-"))  # never the repo logs/
 
 from app import db  # noqa: E402
 

@@ -23,7 +23,12 @@ SOURCE = "Yahoo Finance via yfinance (Ticker.info)"
 def yfinance_info(symbol: str) -> dict:
     import yfinance as yf
 
-    return yf.Ticker(f"{symbol}.NS").info or {}
+    from app.net.outbound import outbound
+
+    with outbound("yfinance fundamentals", "finance.yahoo.com (yfinance)", symbol=symbol) as rec:
+        info = yf.Ticker(f"{symbol}.NS").info or {}
+        rec["fields"] = len(info)
+    return info
 
 
 def _upsert(s: Session, iid: int, metric: str, origin: str) -> InstrumentFact:

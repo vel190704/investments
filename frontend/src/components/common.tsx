@@ -3,6 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { AsOf, Flag } from "@/lib/api";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { parseErrorText } from "@/lib/apierror";
+import { RequestId } from "@/components/request-id";
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
   return (
@@ -96,11 +98,16 @@ export function Loading() {
 }
 
 export function ErrorBox({ message }: { message: string }) {
+  const e = parseErrorText(message);
   return (
     <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-      {message.includes("ECONNREFUSED") || message.startsWith("500")
-        ? "Cannot reach the backend on 127.0.0.1:8000. Is it running? (make dev)"
-        : message}
+      <div>{e.message}</div>
+      {(e.status !== null || e.requestId) && (
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs opacity-80">
+          {e.status !== null && <span>HTTP {e.status}</span>}
+          {e.requestId && <RequestId id={e.requestId} />}
+        </div>
+      )}
     </div>
   );
 }

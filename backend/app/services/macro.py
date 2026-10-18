@@ -28,9 +28,12 @@ class MacroError(ValueError):
 def yf_last_close(ticker: str) -> tuple[Decimal, date]:
     import yfinance as yf
 
-    h = yf.Ticker(ticker).history(period="10d", interval="1d", auto_adjust=False).dropna(subset=["Close"])
-    if h.empty:
-        raise ValueError("no data returned")
+    from app.net.outbound import outbound
+
+    with outbound("yfinance macro", "finance.yahoo.com (yfinance)", ticker=ticker):
+        h = yf.Ticker(ticker).history(period="10d", interval="1d", auto_adjust=False).dropna(subset=["Close"])
+        if h.empty:
+            raise ValueError("no data returned")
     return Decimal(repr(round(float(h["Close"].iloc[-1]), 4))), h.index[-1].date()
 
 

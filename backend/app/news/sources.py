@@ -89,14 +89,14 @@ def fetch_nse(client: PoliteClient) -> tuple[list[RawItem], dict[str, str]]:
     items, errors = [], {}
     for name, url in NSE_FEEDS.items():
         try:
-            items += parse_rss(client.get_text(url), name, "EXCHANGE")
+            items += parse_rss(client.get_text(url, name), name, "EXCHANGE")
         except Exception as e:
             errors[name] = str(e)
     return items, errors
 
 
 def fetch_publisher(client: PoliteClient, name: str, url: str) -> list[RawItem]:
-    return parse_rss(client.get_text(url), name, "NEWS")
+    return parse_rss(client.get_text(url, f"News feed: {name}"), name, "NEWS")
 
 
 def google_news_url(company: str, symbol: str | None) -> str:
@@ -106,4 +106,4 @@ def google_news_url(company: str, symbol: str | None) -> str:
 
 def fetch_google_news(client: PoliteClient, company: str, symbol: str | None) -> list[RawItem]:
     """Requested source. Its robots.txt disallows /rss, so the polite client refuses it (SourceUnavailable)."""
-    return parse_rss(client.get_text(google_news_url(company, symbol)), "Google News", "NEWS")
+    return parse_rss(client.get_text(google_news_url(company, symbol), "Google News"), "Google News", "NEWS")

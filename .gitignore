@@ -27,3 +27,6 @@ next-env.d.ts
 .vscode/
 .idea/
 .DS_Store
+
+# logs (backend: logs/app.log, rotated)
+logs/

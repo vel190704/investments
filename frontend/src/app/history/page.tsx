@@ -12,18 +12,21 @@ export default function HistoryPage() {
   const series = useApi<Series>("/snapshots/series");
   const snaps = useApi<Snapshot[]>("/snapshots");
   const [msg, setMsg] = useState<string | null>(null);
+  const [fail, setFail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function take() {
     setBusy(true);
     try {
       const r = await apiPost<{ snapshot_date: string; partial: boolean; unpriced: string[] }>("/snapshots");
+      setFail(null);
       setMsg(`Snapshot stored for ${formatDate(r.snapshot_date)} (one per day; a later snapshot the same day replaces it)` +
         (r.partial ? `. Partial: ${r.unpriced.length} holding(s) had no price.` : "."));
       series.reload();
       snaps.reload();
     } catch (e) {
-      setMsg(errorText(e));
+      setMsg(null);
+      setFail(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -38,6 +41,7 @@ export default function HistoryPage() {
       />
       <div className="flex flex-col gap-4">
         {msg && <Notice>{msg}</Notice>}
+      {fail && <ErrorBox message={fail} />}
         <Section title="Value vs invested">
           {series.error && <ErrorBox message={series.error} />}
           {series.loading && !series.data && <Loading />}

@@ -19,6 +19,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from app.net.outbound import outbound
+
 USER_AGENT = "personal-portfolio-dashboard/0.4 (single-user, local; respects robots.txt)"
 MIN_INTERVAL = 2.0
 CACHE_SECONDS = 30 * 60
@@ -61,25 +63,28 @@ class PoliteClient:
         st = settings or get_settings()
         return cls(timeout=st.source_timeout_seconds, host_timeouts=st.source_timeouts, **kw)
 
-    def _get(self, url: str, host: str) -> httpx.Response:
+    def _get(self, url: str, host: str, source: str | None = None) -> httpx.Response:
         """One polite GET with a single retry (after RETRY_BACKOFF) on timeouts, connection errors and 502/503/504.
         Raises SourceUnavailable and marks the host down when both attempts fail."""
         timeout = self._host_timeouts.get(host, self._default_timeout)
         last = ""
-        for attempt in (1, 2):
-            if attempt == 2:
-                self._sleep(RETRY_BACKOFF)
-            self._wait(host)
-            try:
-                r = self._client.get(url, timeout=timeout)
-            except httpx.TransportError as e:
-                last = type(e).__name__
-                continue
-            if r.status_code in RETRY_STATUSES:
-                last = f"HTTP {r.status_code}"
-                continue
-            return r
-        raise self._mark_down(host, f"Source unavailable ({host}: {last} after 2 attempts, timeout {timeout:g}s)")
+        with outbound(source or host, host, timeout_s=timeout) as rec:
+            for attempt in (1, 2):
+                rec["retries"] = attempt - 1
+                if attempt == 2:
+                    self._sleep(RETRY_BACKOFF)
+                self._wait(host)
+                try:
+                    r = self._client.get(url, timeout=timeout)
+                except httpx.TransportError as e:
+                    last = type(e).__name__
+                    continue
+                rec["status"] = r.status_code
+                if r.status_code in RETRY_STATUSES:
+                    last = f"HTTP {r.status_code}"
+                    continue
+                return r
+            raise self._mark_down(host, f"Source unavailable ({host}: {last} after 2 attempts, timeout {timeout:g}s)")
 
     def _wait(self, host: str) -> None:
         with self._lock:
@@ -105,7 +110,7 @@ class PoliteClient:
         c = self._robots.get(base)
         if c is None or self._clock() - c.at > ROBOTS_SECONDS:
             rp = urllib.robotparser.RobotFileParser()
-            r = self._get(base + "/robots.txt", parts.netloc)
+            r = self._get(base + "/robots.txt", parts.netloc, f"robots.txt {parts.netloc}")
             if r.status_code in (401, 403):
                 rp.disallow_all = True  # robots.txt itself is refused to an identified client -> not permitted
             elif r.status_code >= 400:
@@ -117,7 +122,7 @@ class PoliteClient:
         ok = c.value.can_fetch(USER_AGENT, url)
         return ok, "" if ok else f"Source unavailable (robots.txt of {parts.netloc} disallows automated access)"
 
-    def get_text(self, url: str) -> str:
+    def get_text(self, url: str, source: str | None = None) -> str:
         hit = self._cache.get(url)
         if hit and self._clock() - hit.at < CACHE_SECONDS:
             return hit.value
@@ -125,7 +130,7 @@ class PoliteClient:
         if not ok:
             raise SourceUnavailable(why)
         host = urlsplit(url).netloc
-        r = self._get(url, host)
+        r = self._get(url, host, source)
         if r.status_code in (401, 403, 429):
             raise SourceUnavailable(f"Source unavailable ({host} answered HTTP {r.status_code}; not retried)")
         if r.status_code >= 400:

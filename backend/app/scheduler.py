@@ -1,77 +1,73 @@
-"""Daily market-data refresh (in-process, Asia/Kolkata)."""
+"""In-process jobs (Asia/Kolkata): the daily end-of-day refresh, and intraday quotes during market hours."""
 
 import logging
+import time
+import uuid
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import get_settings
 from app.db import session_scope
-from app.market.service import refresh_prices
+from app.logging_config import REQUEST_ID, event
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("app.jobs")
 
 
-def _classify_and_fundamentals() -> None:
-    """Daily: classifications (official lists, cached 7 days). Sundays: fundamentals."""
-    from datetime import datetime
-
-    from app.services.classification import refresh_classification
-    from app.services.fundamentals import refresh_fundamentals
-    from app.timeutil import IST
-
+def run_job(name: str, fn, *args, **kwargs):
+    """Run one job step with start/end/duration/outcome logged; its lines carry rid=job:<name>-<id>.
+    Never raises (a failing step must not kill the scheduler thread); returns fn's result or None."""
+    token = REQUEST_ID.set(f"job:{name}-{uuid.uuid4().hex[:6]}")
+    t0 = time.perf_counter()
+    event(log, "job_start", job=name)
     try:
-        with session_scope() as s:
-            refresh_classification(s)
-        if datetime.now(IST).weekday() == 6:
-            with session_scope() as s:
-                refresh_fundamentals(s)
+        result = fn(*args, **kwargs)
     except Exception:
-        log.exception("Classification/fundamentals refresh failed")
+        event(log, "job_end", logging.ERROR, exc_info=True, job=name, outcome="failed",
+              duration_ms=round((time.perf_counter() - t0) * 1000))
+        return None
+    else:
+        summary = {k: result[k] for k in ("ok_count", "error_count", "summary", "added", "created")
+                   if isinstance(result, dict) and k in result}
+        event(log, "job_end", job=name, outcome="ok", duration_ms=round((time.perf_counter() - t0) * 1000), **summary)
+        return result
+    finally:
+        REQUEST_ID.reset(token)
 
 
-def _phase4_daily() -> None:
-    """Daily: news + macro + alerts. Sundays: the opt-in weekly AI job (holdings with new events only)."""
-    from datetime import datetime
-
-    from app.services.alerts import evaluate_alerts
-    from app.services.analysis import weekly_job
-    from app.services.macro import refresh_macro
-    from app.services.news import refresh_news
-    from app.timeutil import IST
-
-    for name, fn in (("news", refresh_news), ("macro", refresh_macro), ("alerts", evaluate_alerts)):
-        try:
-            with session_scope() as s:
-                fn(s)
-        except Exception:
-            log.exception("Daily %s job failed", name)
-    if datetime.now(IST).weekday() == 6:
-        try:
-            with session_scope() as s:
-                weekly_job(s)
-        except Exception:
-            log.exception("Weekly AI job failed")
+def _in_session(fn):
+    def step(*args, **kwargs):
+        with session_scope() as s:
+            return fn(s, *args, **kwargs)
+    return step
 
 
 def _job() -> None:
-    """Daily: refresh prices, then store today's snapshot (refresh_prices takes it)."""
-    _classify_and_fundamentals()
-    try:
-        with session_scope() as s:
-            res = refresh_prices(s, trigger="scheduled")
-        log.info("Scheduled refresh: %s ok, %s errors; snapshot %s", res["ok_count"], res["error_count"],
-                 (res.get("snapshot") or {}).get("snapshot_date"))
-    except Exception:  # never let the scheduler thread die
-        log.exception("Scheduled refresh failed")
-        try:  # still record today's snapshot from cached prices
-            from app.services.snapshots import take_snapshot
+    """Daily: classifications, prices + today's snapshot, news, macro, alerts; Sundays also fundamentals and the
+    opt-in weekly AI job."""
+    from datetime import datetime
 
-            with session_scope() as s:
-                take_snapshot(s, trigger="scheduled")
-        except Exception:
-            log.exception("Scheduled snapshot failed")
-    _phase4_daily()
+    from app.market.service import refresh_prices
+    from app.services.alerts import evaluate_alerts
+    from app.services.analysis import weekly_job
+    from app.services.classification import refresh_classification
+    from app.services.fundamentals import refresh_fundamentals
+    from app.services.macro import refresh_macro
+    from app.services.news import refresh_news
+    from app.services.snapshots import take_snapshot
+    from app.timeutil import IST
+
+    sunday = datetime.now(IST).weekday() == 6
+    run_job("classification", _in_session(refresh_classification))
+    if sunday:
+        run_job("fundamentals", _in_session(refresh_fundamentals))
+    if run_job("prices", _in_session(lambda s: refresh_prices(s, trigger="scheduled"))) is None:
+        run_job("snapshot_from_cache", _in_session(lambda s: take_snapshot(s, trigger="scheduled")))
+    run_job("news", _in_session(refresh_news))
+    run_job("macro", _in_session(refresh_macro))
+    run_job("alerts", _in_session(evaluate_alerts))
+    if sunday:
+        run_job("weekly_ai", _in_session(weekly_job))
 
 
 def start_scheduler() -> BackgroundScheduler | None:
@@ -82,4 +78,5 @@ def start_scheduler() -> BackgroundScheduler | None:
     sched.add_job(_job, CronTrigger(hour=st.refresh_hour, minute=st.refresh_minute, timezone="Asia/Kolkata"),
                   id="daily_refresh", replace_existing=True, misfire_grace_time=3600)
     sched.start()
+    event(log, "scheduler_started", daily_at=f"{st.refresh_hour:02d}:{st.refresh_minute:02d} IST")
     return sched

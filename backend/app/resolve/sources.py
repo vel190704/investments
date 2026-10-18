@@ -11,9 +11,14 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+import logging
+
 import httpx
 
 from app.config import get_settings
+from app.net.outbound import outbound
+
+log = logging.getLogger(__name__)
 
 NSE_EQUITY_URL = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
 NSE_ETF_URL = "https://nsearchives.nseindia.com/content/equities/eq_etfseclist.csv"
@@ -29,12 +34,16 @@ def download(url: str, cache_name: str, max_age_hours: float) -> tuple[str, date
     if path.exists() and (time.time() - path.stat().st_mtime) < max_age_hours * 3600:
         return path.read_text(encoding="utf-8"), datetime.fromtimestamp(path.stat().st_mtime).astimezone()
     try:
-        r = httpx.get(url, headers=UA, timeout=settings.http_timeout_seconds, follow_redirects=True)
-        r.raise_for_status()
+        with outbound(cache_name, url) as rec:
+            r = httpx.get(url, headers=UA, timeout=settings.http_timeout_seconds, follow_redirects=True)
+            rec["status"], rec["bytes"] = r.status_code, len(r.content)
+            r.raise_for_status()
         path.write_text(r.text, encoding="utf-8")
         return r.text, datetime.now().astimezone()
     except Exception:
         if path.exists():
+            log.warning("serving stale cache", extra={"fields": {"source": cache_name, "cached_at": datetime.fromtimestamp(
+                path.stat().st_mtime).astimezone().isoformat()}})
             return path.read_text(encoding="utf-8"), datetime.fromtimestamp(path.stat().st_mtime).astimezone()
         raise
 

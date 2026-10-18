@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -16,7 +18,10 @@ from app.llm.provider import AnthropicProvider, LLMProvider, LLMUnavailable
 from app.llm.validate import validate
 from app.models import LlmAnalysis, LlmCall, NewsItem
 from app.services import settings as st
+from app.logging_config import event
 from app.timeutil import IST, as_utc, today_ist, utcnow
+
+log = logging.getLogger("app.llm")
 
 MAX_ATTEMPTS = 2
 
@@ -64,7 +69,6 @@ def default_provider(s: Session) -> LLMProvider:
 def test_connection(s: Session, model: str | None = None, api_key: str | None = None) -> dict:
     """Settings › Test connection. Sends a fixed ping (no portfolio data) even when the privacy toggle is off,
     because it carries nothing about you; it is logged like any call. Validates the model id for real."""
-    import time
 
     from app.llm.provider import PING_PROMPT, AnthropicProvider, LLMUnavailable
 
@@ -85,12 +89,17 @@ def test_connection(s: Session, model: str | None = None, api_key: str | None = 
     except LLMUnavailable as e:
         out["latency_ms"] = round((time.monotonic() - t0) * 1000)
         out["error"] = str(e)
+        event(log, "llm_connection_test", logging.WARNING, requested_model=requested, outcome="error",
+              error=str(e)[:300], latency_ms=out["latency_ms"], refusal_fallback=fallback)
         _log(s, "connection test", requested, False, error=str(e))
         return out
     out.update(ok=True, model=p.model, fallback_used=p.model != requested, input_tokens=p.input_tokens,
                output_tokens=p.output_tokens, latency_ms=round((time.monotonic() - t0) * 1000), reply=p.text[:40],
                stop_reason=p.stop_reason)
     _log(s, "connection test", p.model, True, p.input_tokens, p.output_tokens)
+    event(log, "llm_connection_test", requested_model=requested, model=p.model, outcome="ok",
+          input_tokens=p.input_tokens, output_tokens=p.output_tokens, latency_ms=out["latency_ms"],
+          refusal_fallback=fallback)
     return out
 
 
@@ -136,6 +145,7 @@ def _run(s: Session, kind: str, iid: int | None, inp: dict, refresh: bool, provi
     q = q.where(LlmAnalysis.instrument_id.is_(None)) if iid is None else q.where(LlmAnalysis.instrument_id == iid)
     cached = s.scalar(q.order_by(LlmAnalysis.id.desc()).limit(1))
     if cached and not refresh:
+        event(log, "llm_call", kind=kind, instrument_id=iid, model=model, input_hash=h[:16], outcome="cache_hit")
         return {"cached": True, "card": card(cached, h)}
     reason = gate(s)
     if reason:
@@ -151,14 +161,24 @@ def _run(s: Session, kind: str, iid: int | None, inp: dict, refresh: bool, provi
     for attempts in range(1, MAX_ATTEMPTS + 1):
         if attempts > 1 and gate(s):
             break  # the cap may be hit between attempts
+        t0 = time.perf_counter()
+        # logged: ids, hash, counts, latency, outcome, validator reasons; never the prompt or input text
+        base = {"kind": kind, "instrument_id": iid, "requested_model": provider.model, "input_hash": h[:16],
+                "attempt": attempts}
         try:
             c = provider.complete_json(spec["system"], messages, spec["schema"])
         except LLMUnavailable as e:
+            event(log, "llm_call", logging.WARNING, **base, outcome="provider_error", error=str(e)[:300],
+                  latency_ms=round((time.perf_counter() - t0) * 1000))
             _log(s, kind, provider.model, False, error=str(e))
             errors = [str(e)]
             break
         tin, tout, served = tin + c.input_tokens, tout + c.output_tokens, c.model
         data, errors = validate(c.text, inp, kind)
+        event(log, "llm_call", logging.INFO if data is not None else logging.WARNING, **base, model=c.model,
+              input_tokens=c.input_tokens, output_tokens=c.output_tokens,
+              latency_ms=round((time.perf_counter() - t0) * 1000), outcome="ok" if data is not None else "rejected",
+              rejection_reasons=[e[:200] for e in errors][:10])
         _log(s, kind, c.model, data is not None, c.input_tokens, c.output_tokens,
              None if data else "; ".join(errors)[:2000])
         if data is not None:

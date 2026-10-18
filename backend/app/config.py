@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     # Secrets: only from .env / environment. Never stored in the DB, returned by the API or logged.
     anthropic_api_key: str = ""
     claude_model: str = ""  # default LLM model (Settings can override)
+    # Logging (app/logging_config.py)
+    log_level: str = "INFO"
+    log_format: str = "kv"  # kv (key=value lines) | json
+    log_dir: Path = REPO_ROOT / "logs"
 
     @property
     def resolved_database_url(self) -> str:

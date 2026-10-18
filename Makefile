@@ -7,7 +7,7 @@ BIN     := $(VENV)/bin
 FILE    ?= data/personal_investment_tracker_clean.xlsx
 
 
-.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals
+.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals logs logs-errors
 
 help:
 	@echo "make setup      install backend (venv) + frontend (npm) dependencies"
@@ -19,6 +19,8 @@ help:
 	@echo "make fundamentals  fetch fundamentals from Yahoo Finance now (also weekly, Sundays)"
 	@echo "make backup     copy the SQLite DB to data/backups/"
 	@echo "make migrate    apply DB migrations (backs up first; also runs on backend start)"
+	@echo "make logs       follow logs/app.log (Ctrl-C to stop)"
+	@echo "make logs-errors  follow WARNING and above only"
 
 setup: hooks
 	test -d $(VENV) || $(PY) -m venv $(VENV)
@@ -74,3 +76,13 @@ migrate:
 
 fundamentals:
 	cd backend && .venv/bin/python -m app.fundamentals_cli
+
+LOG := logs/app.log
+
+logs:
+	@test -f $(LOG) || { echo "No $(LOG) yet: start the backend (make dev)"; exit 1; }
+	tail -n 100 -F $(LOG)
+
+logs-errors:
+	@test -f $(LOG) || { echo "No $(LOG) yet: start the backend (make dev)"; exit 1; }
+	tail -n 2000 -F $(LOG) | grep --line-buffered -E '(level=|"level": ?")(WARNING|ERROR|CRITICAL)|^Traceback|^  File |^[A-Za-z_.]+(Error|Exception)'

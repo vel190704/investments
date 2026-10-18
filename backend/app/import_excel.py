@@ -8,6 +8,9 @@ from app.importer.run import format_report, import_workbook, preview_workbook
 
 
 def main(argv: list[str] | None = None) -> int:
+    from app.logging_config import configure_logging
+
+    configure_logging()
     ap = argparse.ArgumentParser(description="Import the personal investment tracker workbook.")
     ap.add_argument("path")
     ap.add_argument("--no-resolve", action="store_true",

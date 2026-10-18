@@ -7,6 +7,9 @@ from app.services.fundamentals import refresh_fundamentals
 
 
 def main() -> int:
+    from app.logging_config import configure_logging
+
+    configure_logging()
     init_db()
     with session_scope() as s:
         r = refresh_fundamentals(s)

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { BACKEND_DOWN, messageFromBody, messageFromText, withSuffix } from "./apierror";
 
 // ---- types (money: integer paise; decimals: strings) ----
 export type Xirr = { rate: string | null; note: string | null };
@@ -391,26 +392,39 @@ export type QualitativeEntry = { id: number; instrument_id: number; version: num
   capital_allocation_note: string; source_note: string; as_of: string; thesis_entry_id: number | null; created_at: string };
 
 // ---- fetch helpers ----
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly requestId: string | null, readonly detail: string) {
+    super(message);
+  }
+}
 
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
+    const text = await res.text();
+    let detail: string;
+    let rid = res.headers.get("x-request-id");
     try {
-      const body = await res.json();
-      const d = body?.detail;
-      if (typeof d === "string") msg = d;
-      else if (d?.errors) msg = d.errors.map((e: { field?: string; message: string }) =>
-        e.field ? `${e.field}: ${e.message}` : e.message).join("; ");
-      else if (d) msg = JSON.stringify(d);
-    } catch { /* not JSON */ }
-    throw new ApiError(msg);
+      const body = JSON.parse(text);
+      detail = messageFromBody(res.status, body);
+      rid = rid ?? (typeof body?.request_id === "string" ? body.request_id : null);
+    } catch {
+      detail = messageFromText(res.status, text);
+    }
+    throw new ApiError(withSuffix(detail, res.status, rid), res.status, rid, detail);
   }
   return res.json() as Promise<T>;
 }
 
+async function send(path: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(`/api${path}`, init);
+  } catch {
+    throw new ApiError(BACKEND_DOWN, 0, null, BACKEND_DOWN);  // network error: the app server is not reachable
+  }
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
-  return handle<T>(await fetch(`/api${path}`, { cache: "no-store" }));
+  return handle<T>(await send(path, { cache: "no-store" }));
 }
 
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
@@ -420,17 +434,17 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     init.body = JSON.stringify(body);
     init.headers = { "Content-Type": "application/json" };
   }
-  return handle<T>(await fetch(`/api${path}`, init));
+  return handle<T>(await send(path, init));
 }
 
 export async function apiPut<T>(path: string, body: unknown): Promise<T> {
-  return handle<T>(await fetch(`/api${path}`, {
+  return handle<T>(await send(path, {
     method: "PUT", body: JSON.stringify(body), headers: { "Content-Type": "application/json" },
   }));
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
-  return handle<T>(await fetch(`/api${path}`, { method: "DELETE" }));
+  return handle<T>(await send(path, { method: "DELETE" }));
 }
 
 export function errorText(e: unknown): string {
