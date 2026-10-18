@@ -12,7 +12,6 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Date,
-    DateTime,
     Float,
     ForeignKey,
     Integer,
@@ -23,7 +22,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
-from app.types import DecimalText
+from app.types import DecimalText, UTCDateTime
 from app.timeutil import utcnow
 
 
@@ -45,8 +44,8 @@ class Instrument(Base):
     etf_underlying: Mapped[str | None] = mapped_column(String(50))  # NSE: EQUITY|COMMODITY|DEBT|GLOBAL INDICES
     etf_underlying_key: Mapped[str | None] = mapped_column(String(100))  # NSE: GOLD, SILVER, Nifty 50, ...
     region: Mapped[str | None] = mapped_column(String(100))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="instrument")
 
@@ -72,7 +71,7 @@ class Transaction(Base):
     row_key: Mapped[str] = mapped_column(String(100), unique=True)
     source_file: Mapped[str | None] = mapped_column(String(300))
     source_row: Mapped[int | None] = mapped_column(Integer)
-    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    imported_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
     instrument: Mapped[Instrument] = relationship(back_populates="transactions")
 
@@ -120,8 +119,8 @@ class IdentifierCandidate(Base):
     source: Mapped[str] = mapped_column(String(100))
     score: Mapped[float] = mapped_column(Float, default=0.0)  # match score, not money
     status: Mapped[str] = mapped_column(String(20), default="PENDING")  # PENDING|CONFIRMED|REJECTED
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class PriceQuote(Base):
@@ -137,14 +136,14 @@ class PriceQuote(Base):
     previous_date: Mapped[date | None] = mapped_column(Date)
     price_date: Mapped[date] = mapped_column(Date)
     currency: Mapped[str] = mapped_column(String(10), default="INR")
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class ImportRun(Base):
     __tablename__ = "import_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     file_name: Mapped[str] = mapped_column(String(300))
     file_sha256: Mapped[str] = mapped_column(String(64))
     ok: Mapped[bool] = mapped_column(Boolean)
@@ -159,8 +158,8 @@ class RefreshRun(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     trigger: Mapped[str] = mapped_column(String(20))  # manual | scheduled | startup
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     ok_count: Mapped[int] = mapped_column(Integer, default=0)
     error_count: Mapped[int] = mapped_column(Integer, default=0)
     results: Mapped[list] = mapped_column(JSON, default=list)
@@ -178,8 +177,8 @@ class PortfolioSnapshot(Base):
     invested_priced_paise: Mapped[int] = mapped_column(BigInteger)
     unpriced: Mapped[list] = mapped_column(JSON, default=list)  # names of holdings without a price
     trigger: Mapped[str] = mapped_column(String(20))  # refresh | scheduled | startup | manual
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
     asset_classes: Mapped[list["SnapshotAssetClass"]] = relationship(
         back_populates="snapshot", cascade="all, delete-orphan")
@@ -224,14 +223,14 @@ class AppSetting(Base):
 
     key: Mapped[str] = mapped_column(String(50), primary_key=True)
     value: Mapped[dict] = mapped_column(JSON)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
 
 class ChangeLogEntry(Base):
     __tablename__ = "change_log"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
     kind: Mapped[str] = mapped_column(String(30))  # TXN_ADDED|TXN_REMOVED|QTY_CHANGED|AVG_COST_CHANGED|ALLOCATION_CHANGED
     instrument_id: Mapped[int | None] = mapped_column(ForeignKey("instruments.id"))
     snapshot_date: Mapped[date | None] = mapped_column(Date, index=True)
@@ -270,7 +269,7 @@ class InstrumentFact(Base):
     value_text: Mapped[str | None] = mapped_column(String(300))
     source: Mapped[str] = mapped_column(String(300))
     as_of: Mapped[date | None] = mapped_column(Date)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     note: Mapped[str | None] = mapped_column(Text)
 
 
@@ -288,7 +287,7 @@ class FundDisclosure(Base):
     parser: Mapped[str] = mapped_column(String(50))
     source_file: Mapped[str] = mapped_column(String(300))
     file_sha256: Mapped[str] = mapped_column(String(64))
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    uploaded_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     equity_weight: Mapped[Decimal] = mapped_column(DecimalText)
     rows: Mapped[int] = mapped_column(Integer)
 
@@ -324,8 +323,8 @@ class NewsItem(Base):
     source: Mapped[str] = mapped_column(String(100))
     source_kind: Mapped[str] = mapped_column(String(10))  # EXCHANGE | NEWS
     url: Mapped[str] = mapped_column(String(1000), unique=True)
-    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    published_at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
+    fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     category: Mapped[str] = mapped_column(String(40))
     category_origin: Mapped[str] = mapped_column(String(10))  # RULE | MODEL
     summary: Mapped[str | None] = mapped_column(Text)
@@ -341,7 +340,7 @@ class NewsSourceStatus(Base):
     isin: Mapped[str | None] = mapped_column(String(20))  # None = whole-source status
     ok: Mapped[bool] = mapped_column(Boolean)
     message: Mapped[str] = mapped_column(Text)
-    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    checked_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     items_fetched: Mapped[int | None] = mapped_column(Integer)  # last refresh; None when the source failed
     items_matched: Mapped[int | None] = mapped_column(Integer)
 
@@ -358,7 +357,7 @@ class MacroValue(Base):
     unit: Mapped[str] = mapped_column(String(30))
     source: Mapped[str] = mapped_column(String(300))
     as_of: Mapped[date | None] = mapped_column(Date)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     status: Mapped[str] = mapped_column(String(10), default="OK")  # OK | UNAVAILABLE
     note: Mapped[str | None] = mapped_column(Text)
 
@@ -370,7 +369,7 @@ class SectorSensitivity(Base):
     tags: Mapped[list] = mapped_column(JSON, default=list)
     origin: Mapped[str] = mapped_column(String(10))  # STARTER | USER
     note: Mapped[str | None] = mapped_column(Text)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
 
 class LlmAnalysis(Base):
@@ -388,7 +387,7 @@ class LlmAnalysis(Base):
     model: Mapped[str] = mapped_column(String(100))
     prompt_version: Mapped[str] = mapped_column(String(20))
     data_as_of: Mapped[date | None] = mapped_column(Date)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     attempts: Mapped[int] = mapped_column(Integer, default=1)
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
@@ -400,7 +399,7 @@ class LlmCall(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     purpose: Mapped[str] = mapped_column(String(20))  # analysis | category
     model: Mapped[str] = mapped_column(String(100))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     ok: Mapped[bool] = mapped_column(Boolean)
@@ -420,7 +419,7 @@ class ThesisEntry(Base):
     change_view: Mapped[str] = mapped_column(Text)
     horizon: Mapped[str] = mapped_column(String(100))
     review_date: Mapped[date | None] = mapped_column(Date)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     linked_txn_ids: Mapped[list] = mapped_column(JSON, default=list)
     linked_change_ids: Mapped[list] = mapped_column(JSON, default=list)
 
@@ -430,7 +429,7 @@ class ThesisOptIn(Base):
 
     instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), primary_key=True)
     send_to_llm: Mapped[bool] = mapped_column(Boolean, default=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
 
 class Alert(Base):
@@ -442,8 +441,8 @@ class Alert(Base):
     instrument_id: Mapped[int | None] = mapped_column(ForeignKey("instruments.id"))
     title: Mapped[str] = mapped_column(String(300))
     detail: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
-    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class AlertState(Base):
@@ -467,7 +466,7 @@ class AnnualFinancial(Base):
     metric: Mapped[str] = mapped_column(String(40))  # revenue|net_income|ebit|interest_expense|fcf|equity|total_debt|diluted_eps
     value: Mapped[Decimal] = mapped_column(DecimalText)
     source: Mapped[str] = mapped_column(String(200))
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class PeerSet(Base):
@@ -478,7 +477,7 @@ class PeerSet(Base):
     instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), primary_key=True)
     symbols: Mapped[list] = mapped_column(JSON, default=list)
     note: Mapped[str | None] = mapped_column(Text)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
 
 class PeerMetric(Base):
@@ -493,7 +492,7 @@ class PeerMetric(Base):
     note: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(200))
     as_of: Mapped[date | None] = mapped_column(Date)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class QualitativeEntry(Base):
@@ -511,7 +510,7 @@ class QualitativeEntry(Base):
     source_note: Mapped[str] = mapped_column(Text)
     as_of: Mapped[date] = mapped_column(Date)
     thesis_entry_id: Mapped[int | None] = mapped_column(ForeignKey("thesis_entries.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class SourceEvent(Base):
@@ -521,7 +520,7 @@ class SourceEvent(Base):
     source: Mapped[str] = mapped_column(String(60), index=True)
     ok: Mapped[bool] = mapped_column(Boolean)
     message: Mapped[str] = mapped_column(Text)
-    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
 
 
 class SnapshotGap(Base):
@@ -531,4 +530,19 @@ class SnapshotGap(Base):
 
     gap_date: Mapped[date] = mapped_column(Date, primary_key=True)
     reason: Mapped[str] = mapped_column(String(200))
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    recorded_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class IntradayTick(Base):
+    """Real intraday quotes (1-minute bars) for direct stocks/ETFs, kept 14 days. Never used by snapshots, XIRR or
+    history (those stay end-of-day from price_quotes)."""
+
+    __tablename__ = "intraday_ticks"
+    __table_args__ = (UniqueConstraint("instrument_id", "ts", "source"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
+    ts: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)  # the quote's own time (bar start)
+    price: Mapped[Decimal] = mapped_column(DecimalText)
+    source: Mapped[str] = mapped_column(String(80))
+    fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
