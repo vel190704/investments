@@ -1,5 +1,6 @@
 """The pre-commit scan (.githooks/scan.sh) refuses secrets, dumps, encrypted backups and deletion registers."""
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,15 +12,18 @@ pytestmark = pytest.mark.skipif(not shutil.which("git"), reason="needs git")
 
 
 def staged(tmp_path, name: str, content: bytes) -> int:
+    # Inside the pre-commit hook git exports GIT_INDEX_FILE, GIT_DIR, ...: drop them, or these commands would act on
+    # the outer repository's index instead of the throwaway one.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     repo = tmp_path / "repo"
     if not repo.exists():
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
     p = repo / name
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(content)
-    subprocess.run(["git", "-C", str(repo), "add", name], check=True)
-    r = subprocess.run(["bash", str(SCAN)], cwd=repo, capture_output=True, text=True)
-    subprocess.run(["git", "-C", str(repo), "rm", "-q", "--cached", name], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", name], check=True, env=env)
+    r = subprocess.run(["bash", str(SCAN)], cwd=repo, capture_output=True, text=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "rm", "-q", "--cached", name], check=True, env=env)
     return r.returncode
 
 

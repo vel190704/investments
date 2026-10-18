@@ -138,7 +138,7 @@ DEBUG only, so monitoring doesn't fill the logs. No key or token is needed; neve
 
 ### 2.2 What to expect on the Render plan (⚠ verify on your plan)
 
-- **Starter (the recommended production type, DEPLOY.md §4):** always on. The only restarts are deploys, your manual
+- **Starter (the recommended production type, DEPLOY.md §6):** always on. The only restarts are deploys, your manual
   restarts and Render maintenance. Each takes well under a minute. Requests during a restart may fail briefly; the app
   retries reads on its own (below).
 - **Free:** at the time of writing the service **sleeps after about 15 minutes without requests** and wakes on the next
