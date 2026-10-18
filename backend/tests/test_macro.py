@@ -89,3 +89,81 @@ def test_sensitivity_table_lists_only_real_sectors(session, workbook):
     page = mc.sensitivity_page(session)
     names = [r["sector"] for r in page["table"]]
     assert set(names) == {"Construction", "Financial Services"} and not any(n.startswith(("Not looked through", "Unclassified", "Debt, cash")) for n in names)
+
+
+def _race(tmp_path, monkeypatch, fn):
+    """Run fn(session) in two threads that both finish reading before either writes."""
+    import threading
+
+    from app import db
+    from app.models import SectorSensitivity
+
+    if db.get_engine().url.database is None or "race" not in str(db.get_engine().url):
+        db.configure(f"sqlite:///{tmp_path / 'race.db'}")
+        db.init_db()
+    barrier = threading.Barrier(2, timeout=2)
+
+
+    from sqlalchemy.orm import Session
+
+    real_flush = Session.flush
+
+    def gated_flush(self, *a, **kw):  # both workers have done their existence check before either writes
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            pass
+        return real_flush(self, *a, **kw)
+
+    monkeypatch.setattr(Session, "flush", gated_flush)
+    errors: list[BaseException] = []
+
+    def worker():
+        try:
+            with db.session_scope() as s:
+                fn(s)
+        except BaseException as e:  # noqa: BLE001 - collected for the assertion
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(15)
+    monkeypatch.undo()
+    with db.session_scope() as s:
+        rows = list(s.scalars(__import__("sqlalchemy").select(SectorSensitivity)))
+    return errors, rows
+
+
+def test_concurrent_starter_seeding_is_idempotent(tmp_path, monkeypatch):
+    errors, rows = _race(tmp_path, monkeypatch, lambda s: mc.ensure_starter(s, ["Construction", "Financial Services"]))
+    assert errors == []
+    assert sorted(r.sector for r in rows) == ["Construction", "Financial Services"]
+    assert all(r.origin == "STARTER" for r in rows)
+
+
+def test_starter_seeding_never_overwrites_user_tags_even_when_racing(tmp_path, monkeypatch):
+    from app import db
+
+    db.configure(f"sqlite:///{tmp_path / 'race2.db'}")
+    db.init_db()
+    with db.session_scope() as s:
+        mc.set_tags(s, "Construction", ["rate-sensitive"])
+    errors, rows = _race(tmp_path, monkeypatch, lambda s: mc.ensure_starter(s, ["Construction"]))
+    assert errors == [] and [(r.origin, r.tags) for r in rows] == [("USER", ["rate-sensitive"])]
+
+
+def test_get_macro_concurrently_never_500s(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from fastapi.testclient import TestClient
+
+    from app import db
+    from app.main import app
+
+    db.configure(f"sqlite:///{tmp_path / 'm.db'}")
+    with TestClient(app) as c:
+        with ThreadPoolExecutor(8) as ex:
+            codes = list(ex.map(lambda _: c.get("/api/macro").status_code, range(16)))
+    assert set(codes) == {200}

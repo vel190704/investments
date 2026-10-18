@@ -8,6 +8,7 @@ from decimal import Decimal
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app import repository as repo
 from app.calc import scenarios as sc
 from app.models import MacroValue, SectorSensitivity
 from app.timeutil import as_utc, today_ist, utcnow
@@ -112,13 +113,30 @@ def snapshot(s: Session) -> list[dict]:
     return out
 
 
-def ensure_starter(s: Session, held_sectors: list[str]) -> None:
-    """Seed STARTER tags for held sectors that have no row yet (never overwrites USER edits)."""
-    existing = {r.sector for r in s.scalars(select(SectorSensitivity))}
-    for sector in held_sectors:
-        if sector in sc.STARTER and sector not in existing:
-            s.add(SectorSensitivity(sector=sector, tags=list(sc.STARTER[sector]), origin="STARTER", note=sc.STARTER_LABEL))
+def ensure_starter(s: Session, held_sectors: list[str]) -> int:
+    """Seed STARTER tags for held sectors that have no row yet. Idempotent and race-safe (ON CONFLICT DO
+    NOTHING), so it never overwrites USER edits and two concurrent callers cannot collide."""
+    rows = [{"sector": sec, "tags": list(sc.STARTER[sec]), "origin": "STARTER", "note": sc.STARTER_LABEL}
+            for sec in dict.fromkeys(held_sectors) if sec in sc.STARTER]
     s.flush()
+    n = repo.insert_ignore(s, SectorSensitivity, rows, ["sector"])
+    for obj in [o for o in s.identity_map.values() if isinstance(o, SectorSensitivity)]:
+        s.expire(obj)  # reload rows another session may have inserted
+    return n
+
+
+def held_taggable_sectors(s: Session) -> list[str]:
+    """Real equity sectors you hold (incl. via funds): not fund/debt/cash buckets or "Unclassified"."""
+    from app.calc.sectors import is_equity_sector
+    from app.services.lookthrough import sectors_page
+
+    return [r["sector"] for r in sectors_page(s)["sectors"]
+            if is_equity_sector(r["sector"]) and not r["sector"].startswith("Unclassified")]
+
+
+def seed_starter_sensitivities(s: Session) -> int:
+    """Run at start-up and after imports/classification changes; page reads never write."""
+    return ensure_starter(s, held_taggable_sectors(s))
 
 
 def set_tags(s: Session, sector: str, tags: list[str], note: str | None = None) -> SectorSensitivity:
@@ -147,7 +165,6 @@ def sensitivity_page(s: Session) -> dict:
     # only real sectors are taggable (not "Not looked through — fund", debt/cash buckets or "Unclassified")
     held = [r["sector"] for r in sp["sectors"]
             if is_equity_sector(r["sector"]) and not r["sector"].startswith("Unclassified")]
-    ensure_starter(s, held)
     rows = {r.sector: r for r in s.scalars(select(SectorSensitivity))}
     table = [{"sector": sec, "tags": rows[sec].tags if sec in rows else [], "origin": rows[sec].origin if sec in rows else None,
               "note": rows[sec].note if sec in rows else None, "held_pct": next(r["pct"] for r in sp["sectors"] if r["sector"] == sec)}

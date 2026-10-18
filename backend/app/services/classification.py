@@ -152,6 +152,7 @@ def refresh_classification(s: Session) -> dict:
                          f"{len(report['stocks_unclassified'])} not in NSE lists, {len(report['etfs'])} ETFs, "
                          f"{len(report['funds'])} fund categories" + (f"; {len(report['errors'])} problem(s)"
                                                                      if report["errors"] else ""))
+    _seed_sensitivities(s)
     return report
 
 
@@ -178,7 +179,16 @@ def set_overrides(s: Session, instrument_id: int, *, sector: str | None = None, 
         inst.region = region.strip()
         upsert_manual_region(s, inst.id, region.strip(), note)
     s.flush()
+    if sector is not None:
+        _seed_sensitivities(s)
     return inst
+
+
+def _seed_sensitivities(s: Session) -> None:
+    """Held sectors may have changed: give new ones their STARTER sensitivity tags (idempotent)."""
+    from app.services.macro import seed_starter_sensitivities
+
+    seed_starter_sensitivities(s)
 
 
 def upsert_manual_region(s: Session, instrument_id: int, region: str, note: str | None) -> None:

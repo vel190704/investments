@@ -55,6 +55,13 @@ def ensure_first_snapshot() -> dict | None:
 async def lifespan(app: FastAPI):
     init_db()
     try:
+        from app.services.macro import seed_starter_sensitivities
+
+        with session_scope() as s:
+            seed_starter_sensitivities(s)
+    except Exception:
+        log.exception("Seeding starter sensitivity tags failed")
+    try:
         first = ensure_first_snapshot()
         if first:
             log.info("Stored first snapshot for %s", first["snapshot_date"])

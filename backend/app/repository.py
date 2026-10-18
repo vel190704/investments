@@ -13,6 +13,23 @@ from app.models import (
 )
 
 
+# idempotent seeding
+def insert_ignore(s: Session, model, rows: list[dict], conflict_cols: list[str]) -> int:
+    """INSERT ... ON CONFLICT DO NOTHING (SQLite and Postgres). Safe when two requests seed at once.
+    Returns the number of rows actually inserted."""
+    if not rows:
+        return 0
+    name = s.get_bind().dialect.name
+    if name == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+    elif name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:  # pragma: no cover - only SQLite/Postgres are supported
+        raise NotImplementedError(f"insert_ignore: unsupported dialect {name}")
+    res = s.execute(insert(model).values(rows).on_conflict_do_nothing(index_elements=conflict_cols))
+    return res.rowcount or 0
+
+
 # instruments
 def instruments_by_key(s: Session) -> dict[str, Instrument]:
     return {i.instrument_key: i for i in s.scalars(select(Instrument))}
