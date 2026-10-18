@@ -232,6 +232,7 @@ Frontend (Vercel), per scope:
 | `NEXT_PUBLIC_API_URL` | production backend URL | preview backend URL |
 | `NEXT_PUBLIC_SUPABASE_URL` | prod project URL | preview project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | prod publishable key | preview publishable key |
+| `NEXT_PUBLIC_BACKUP_RETENTION_DAYS` | your plan's backup retention | same or preview's |
 
 Never set on Vercel: `NEXT_PUBLIC_DEV_AUTH`, `BACKEND_URL`, or any secret. Everything `NEXT_PUBLIC_*` is visible in
 the browser.
@@ -393,3 +394,39 @@ branch. That branch only moves by fast-forward to a `main` commit whose CI alrea
 
 **Rollback** in this flow: the dashboard rollbacks in §12 work the same way. To move `production` back for good,
 revert on `main` (`git revert`), let CI pass, and `make release` again. Never reset or force-push `production`.
+
+## 18. Deletion requests and backups
+
+**What deletion does:** Account › *Delete my account and all data* (or Admin › *delete all data*) removes every
+per-user row from the live database at once. The `users` row and the invitation go too, and so does the Supabase
+sign-in account if `SUPABASE_SERVICE_ROLE_KEY` is set. Shared market data is untouched; it contains nothing about
+the person.
+
+**What it cannot do:** database backups made before the deletion still contain the data until they expire.
+- Find the real retention for your plan in Supabase › **Database › Backups**. At the time of writing, paid plans
+  keep daily backups for a number of days that depends on the plan, and point-in-time recovery is an add-on with
+  its own window. Check your project.
+- Set Vercel's `NEXT_PUBLIC_BACKUP_RETENTION_DAYS` (both scopes) to that number of days, and redeploy. The Terms
+  page shows it.
+- Render's log stream keeps logs for a limited time. They hold only numeric ids, never personal content.
+- Sentry events are scrubbed (§15) and expire per your Sentry plan.
+
+**Procedure for a deletion request (admin):**
+1. **Check it is them.** Act only on a request from the account's own email address (reply to that address), or
+   on the person deleting it themselves on the Account page.
+2. **Offer an export first.** They can use Account › *Export my data* or ask you for it.
+3. **Delete.** Admin page › the person › *delete all data…* › type their email › *Delete permanently*.
+4. **Sign-in account:** if `SUPABASE_SERVICE_ROLE_KEY` is not set, also delete them in Supabase › Authentication ›
+   Users. If it is set, check that they are gone from that list.
+5. **Record it** in a private deletion register **outside the app** (e.g. a note in your password manager): the
+   date, the numeric user id shown on the Admin page and the email. This is what lets you honour the deletion
+   again after a restore. Delete the entry once the backup retention period has passed.
+6. **Confirm in writing:** "Your account and data were deleted from the live system on <date>. Copies in
+   automatic backups expire by <date + retention days>."
+7. **If you ever restore a backup** while a register entry is still within the retention window: before reopening
+   the app, delete each such person again (Admin page, and Supabase › Authentication › Users, because sign-in
+   accounts are restored too), then check the Admin page.
+
+Deleting a person never touches anyone else's data; the deletion is per-user tables only and is tested
+(`test_admin_can_delete_a_users_data_completely`).
+
