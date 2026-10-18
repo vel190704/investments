@@ -160,7 +160,7 @@ def mappings_resolve(session: Session = Depends(get_session)):
     return resolve_identifiers(session)
 
 
-@router.post("/mappings/candidates/{cid}/confirm")
+@router.post("/mappings/candidates/{cid:int}/confirm")
 def confirm(cid: int, session: Session = Depends(get_session)):
     try:
         c = decide(session, cid, True)
@@ -169,7 +169,7 @@ def confirm(cid: int, session: Session = Depends(get_session)):
     return {"id": c.id, "status": c.status}
 
 
-@router.post("/mappings/candidates/{cid}/reject")
+@router.post("/mappings/candidates/{cid:int}/reject")
 def reject(cid: int, session: Session = Depends(get_session)):
     try:
         c = decide(session, cid, False)
@@ -254,7 +254,7 @@ def add_transaction(body: TxnIn, session: Session = Depends(get_session)):
         raise HTTPException(422, {"errors": e.errors}) from None
 
 
-@router.delete("/transactions/{txn_id}")
+@router.delete("/transactions/{txn_id:int}")
 def delete_transaction(txn_id: int, session: Session = Depends(get_session)):
     from app.services.transactions import TxnValidationError, delete_ui_transaction
 
@@ -500,7 +500,7 @@ class ClassificationIn(BaseModel):
     note: str | None = None
 
 
-@router.put("/instruments/{iid}/classification")
+@router.put("/instruments/{iid:int}/classification")
 def set_classification(iid: int, body: ClassificationIn, session: Session = Depends(get_session)):
     from app.services.classification import ClassificationError, set_overrides
 
@@ -513,7 +513,7 @@ def set_classification(iid: int, body: ClassificationIn, session: Session = Depe
     return {"ok": True}
 
 
-@router.delete("/instruments/{iid}/classification/{field}")
+@router.delete("/instruments/{iid:int}/classification/{field}")
 def clear_classification(iid: int, field: str, session: Session = Depends(get_session)):
     from app.services.classification import ClassificationError, clear_override
 
@@ -560,7 +560,7 @@ class FactIn(BaseModel):
     as_of: str
 
 
-@router.put("/facts/{iid}/{metric}")
+@router.put("/facts/{iid:int}/{metric}")
 def put_fact(iid: int, metric: str, body: FactIn, session: Session = Depends(get_session)):
     from datetime import date as _date
 
@@ -580,7 +580,7 @@ def put_fact(iid: int, metric: str, body: FactIn, session: Session = Depends(get
     return {"ok": True}
 
 
-@router.delete("/facts/{iid}/{metric}")
+@router.delete("/facts/{iid:int}/{metric}")
 def delete_fact(iid: int, metric: str, session: Session = Depends(get_session)):
     from app.services.fundamentals import delete_manual
 
@@ -620,7 +620,7 @@ def disclosures(session: Session = Depends(get_session)):
             "parsers": [{"key": k, "label": l.label} for k, l in LAYOUTS.items()]}
 
 
-@router.delete("/disclosures/{did}")
+@router.delete("/disclosures/{did:int}")
 def delete_disclosure(did: int, session: Session = Depends(get_session)):
     from app.services.disclosures import delete
 
@@ -753,7 +753,53 @@ def analysis_cards(session: Session = Depends(get_session)):
     return cards(session)
 
 
-@router.post("/analysis/{iid}")
+def _llm_call(fn):
+    from app.llm.inputs import InputError
+    from app.llm.provider import LLMUnavailable
+
+    try:
+        return fn()
+    except InputError as e:
+        raise HTTPException(422, str(e)) from None
+    except LLMUnavailable as e:
+        raise HTTPException(409, str(e)) from None
+
+
+@router.post("/analysis/fund/{iid:int}")
+def analysis_fund(iid: int, refresh: bool = False, session: Session = Depends(get_session)):
+    from app.services.analysis import analyze_fund
+
+    out = _llm_call(lambda: analyze_fund(session, iid, refresh=refresh))
+    return out
+
+
+@router.post("/analysis/portfolio")
+def analysis_portfolio(refresh: bool = False, session: Session = Depends(get_session)):
+    from app.services.analysis import analyze_portfolio
+
+    return _llm_call(lambda: analyze_portfolio(session, refresh=refresh))
+
+
+@router.get("/analysis/portfolio/preview")
+def analysis_portfolio_preview(session: Session = Depends(get_session)):
+    from app.services.analysis import preview
+
+    return _llm_call(lambda: preview(session, None, "portfolio"))
+
+
+@router.get("/analysis/sent/{aid:int}")
+def analysis_sent_any(aid: int, session: Session = Depends(get_session)):
+    from app.llm.prompts import KINDS
+    from app.models import LlmAnalysis
+
+    a = session.get(LlmAnalysis, aid)
+    if a is None:
+        raise HTTPException(404, "analysis not found")
+    return {"kind": a.kind, "model": a.model, "requested_model": a.requested_model, "prompt_version": a.prompt_version,
+            "system": KINDS[a.kind]["system"], "input": a.input_json}
+
+
+@router.post("/analysis/{iid:int}")
 def analysis_run(iid: int, refresh: bool = False, session: Session = Depends(get_session)):
     from app.llm.inputs import InputError
     from app.llm.provider import LLMUnavailable
@@ -768,7 +814,7 @@ def analysis_run(iid: int, refresh: bool = False, session: Session = Depends(get
         raise HTTPException(409, str(e)) from None
 
 
-@router.get("/analysis/{iid}/preview")
+@router.get("/analysis/{iid:int}/preview")
 def analysis_preview(iid: int, kind: str = "stock", session: Session = Depends(get_session)):
     from app.llm.inputs import InputError
     from app.services.analysis import preview
@@ -781,7 +827,7 @@ def analysis_preview(iid: int, kind: str = "stock", session: Session = Depends(g
         raise HTTPException(422, str(e)) from None
 
 
-@router.get("/analysis/{iid}/sent/{aid}")
+@router.get("/analysis/{iid:int}/sent/{aid:int}")
 def analysis_sent(iid: int, aid: int, session: Session = Depends(get_session)):
     from app.llm.prompts import SYSTEM_PROMPT
     from app.models import LlmAnalysis
@@ -828,7 +874,7 @@ class ThesisIn(BaseModel):
     linked_change_ids: list[int] = []
 
 
-@router.post("/journal/{iid}", status_code=201)
+@router.post("/journal/{iid:int}", status_code=201)
 def journal_add(iid: int, body: ThesisIn, session: Session = Depends(get_session)):
     from datetime import date as _date
 
@@ -845,7 +891,7 @@ def journal_add(iid: int, body: ThesisIn, session: Session = Depends(get_session
         raise HTTPException(422, str(e)) from None
 
 
-@router.get("/journal/{iid}/history")
+@router.get("/journal/{iid:int}/history")
 def journal_history(iid: int, session: Session = Depends(get_session)):
     from app.services.journal import history
 
@@ -856,7 +902,7 @@ class OptIn(BaseModel):
     send_to_llm: bool
 
 
-@router.put("/journal/{iid}/optin")
+@router.put("/journal/{iid:int}/optin")
 def journal_optin(iid: int, body: OptIn, session: Session = Depends(get_session)):
     from app.services.journal import set_optin
 
@@ -891,7 +937,7 @@ def alerts_evaluate(session: Session = Depends(get_session)):
     return evaluate_alerts(session)
 
 
-@router.post("/alerts/{aid}/read")
+@router.post("/alerts/{aid:int}/read")
 def alerts_read(aid: int, session: Session = Depends(get_session)):
     from app.services.alerts import mark_read
 
@@ -917,7 +963,7 @@ def valuation_all(session: Session = Depends(get_session)):
     return overview(session)
 
 
-@router.get("/valuation/{iid}")
+@router.get("/valuation/{iid:int}")
 def valuation_one(iid: int, session: Session = Depends(get_session)):
     from app.services.valuation import stock_view
 
@@ -931,7 +977,7 @@ class PeersIn(BaseModel):
     note: str | None = None
 
 
-@router.put("/peers/{iid}")
+@router.put("/peers/{iid:int}")
 def peers_set(iid: int, body: PeersIn, session: Session = Depends(get_session)):
     from app.services.valuation import PeerError, set_peers
 
@@ -949,7 +995,7 @@ def peers_refresh(session: Session = Depends(get_session)):
     return refresh(session, own=False)
 
 
-@router.get("/qualitative/{iid}")
+@router.get("/qualitative/{iid:int}")
 def qualitative_history(iid: int, session: Session = Depends(get_session)):
     from app.services.qualitative import MOAT_TYPES, history
 
@@ -965,7 +1011,7 @@ class QualIn(BaseModel):
     thesis_entry_id: int | None = None
 
 
-@router.post("/qualitative/{iid}", status_code=201)
+@router.post("/qualitative/{iid:int}", status_code=201)
 def qualitative_add(iid: int, body: QualIn, session: Session = Depends(get_session)):
     from datetime import date as _date
 
@@ -980,52 +1026,6 @@ def qualitative_add(iid: int, body: QualIn, session: Session = Depends(get_sessi
                    body.thesis_entry_id)
     except QualitativeError as e:
         raise HTTPException(422, str(e)) from None
-
-
-def _llm_call(fn):
-    from app.llm.inputs import InputError
-    from app.llm.provider import LLMUnavailable
-
-    try:
-        return fn()
-    except InputError as e:
-        raise HTTPException(422, str(e)) from None
-    except LLMUnavailable as e:
-        raise HTTPException(409, str(e)) from None
-
-
-@router.post("/analysis/fund/{iid}")
-def analysis_fund(iid: int, refresh: bool = False, session: Session = Depends(get_session)):
-    from app.services.analysis import analyze_fund
-
-    out = _llm_call(lambda: analyze_fund(session, iid, refresh=refresh))
-    return out
-
-
-@router.post("/analysis/portfolio")
-def analysis_portfolio(refresh: bool = False, session: Session = Depends(get_session)):
-    from app.services.analysis import analyze_portfolio
-
-    return _llm_call(lambda: analyze_portfolio(session, refresh=refresh))
-
-
-@router.get("/analysis/portfolio/preview")
-def analysis_portfolio_preview(session: Session = Depends(get_session)):
-    from app.services.analysis import preview
-
-    return _llm_call(lambda: preview(session, None, "portfolio"))
-
-
-@router.get("/analysis/sent/{aid}")
-def analysis_sent_any(aid: int, session: Session = Depends(get_session)):
-    from app.llm.prompts import KINDS
-    from app.models import LlmAnalysis
-
-    a = session.get(LlmAnalysis, aid)
-    if a is None:
-        raise HTTPException(404, "analysis not found")
-    return {"kind": a.kind, "model": a.model, "requested_model": a.requested_model, "prompt_version": a.prompt_version,
-            "system": KINDS[a.kind]["system"], "input": a.input_json}
 
 
 @router.get("/source-health")
