@@ -25,7 +25,7 @@ def yfinance_info(symbol: str) -> dict:
 
     from app.net.outbound import outbound
 
-    with outbound("yfinance fundamentals", "finance.yahoo.com (yfinance)", symbol=symbol) as rec:
+    with outbound("yfinance fundamentals", "finance.yahoo.com (yfinance)", private=(f"{symbol}.NS", symbol)) as rec:
         info = yf.Ticker(f"{symbol}.NS").info or {}
         rec["fields"] = len(info)
     return info

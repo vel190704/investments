@@ -125,12 +125,11 @@ def poll_cycle(s: Session, now: datetime | None = None, manual: bool = False, fe
         STATE.last_cycle = cycle
     from app.services.source_health import record
 
-    record(s, "yfinance intraday", bool(ok), f"{len(ok)}/{len(by_symbol)} ok"
-           + (f"; e.g. {next(iter(failed.values()))[:150]}" if failed else ""))
+    record(s, "yfinance intraday", bool(ok), f"{len(ok)}/{len(by_symbol)} ok")  # shared: counts only
     event(log, "live_poll", logging.INFO if not failed else logging.WARNING, requested=cycle["requested"],
           succeeded=cycle["succeeded"], failed=cycle["failed"], duration_ms=cycle["duration_ms"], manual=manual,
           market=market.reason, ticks_added=added, backoff_s=cycle["next_interval_s"],
-          failures=[f"{sym}: {res[:80]}" for sym, res in data.items() if isinstance(res, str)][:10])
+          failed_security_ids=sorted(failed)[:50])  # ids, never symbols
     return cycle
 
 

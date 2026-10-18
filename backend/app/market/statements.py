@@ -29,7 +29,7 @@ def fetch_payload(symbol: str) -> dict:
 
     from app.net.outbound import outbound
 
-    with outbound("yfinance statements", "finance.yahoo.com (yfinance)", symbol=symbol) as rec:
+    with outbound("yfinance statements", "finance.yahoo.com (yfinance)", private=(f"{symbol}.NS", symbol)) as rec:
         t = yf.Ticker(f"{symbol}.NS")
         info = t.info or {}
         out = {"info": {k: info.get(k) for k in INFO_KEYS},

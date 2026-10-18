@@ -95,8 +95,10 @@ def refresh_prices(s: Session, trigger: str = "manual", providers: list[PricePro
             ok = [r for r in mine if r["ok"]]
             hard = [r for r in mine if not r["ok"] and "not confirmed" not in (r.get("error") or "")]
             label = "AMFI NAVAll" if "AMFI" in p.name else "yfinance prices"
+            # source health is shared by all users: counts only, never which security failed (that would reveal
+            # holdings); each user sees their own failures on their holdings pages
             record(s, label, bool(ok) or not hard, f"{len(ok)} ok, {len(mine) - len(ok)} unavailable"
-                   + (f"; e.g. {hard[0]['error'][:200]}" if hard else ""))
+                   + (f" ({len(hard)} source errors)" if hard else ""))
     run.results = results
     run.ok_count = sum(1 for r in results if r["ok"])
     run.error_count = len(results) - run.ok_count
@@ -105,7 +107,7 @@ def refresh_prices(s: Session, trigger: str = "manual", providers: list[PricePro
     event(log, "price_refresh", logging.INFO if not run.error_count else logging.WARNING, trigger=trigger,
           requested=len(results), ok=run.ok_count, failed=run.error_count,
           duration_ms=round((time.perf_counter() - t0) * 1000),
-          failures=[f"{r['name']}: {r.get('error', '')[:120]}" for r in results if not r["ok"]][:10])
+          failed_security_ids=[r["security_id"] for r in results if not r["ok"]][:50])  # ids, never symbols
     snapshot = None
     try:
         from app.services.snapshots import take_snapshot

@@ -78,6 +78,8 @@ in-app transaction form) is the only input for holdings and transactions.** See 
 - Auth: Supabase JWT (JWKS/HS256) and the invite list; fail closed: the local fake user needs
   `DEV_AUTH=1` AND `ENV=development|test`; unset/unknown ENV = production; never weaken this.
 - Logs carry the numeric user id (`uid=`), never emails, financial figures, workbook contents or journal text.
+- Shared status (source health, refresh runs, logs) never names a security: counts and numeric security ids only;
+  pass the ticker as `private=` to `outbound()` so fetch errors are scrubbed. `tests/test_canary.py` enforces it.
 - Postgres-only behaviour (string lengths, RLS, advisory locks) is tested with `make pg-up && make test-postgres`;
   `make test-all-postgres` runs the whole suite on Postgres.
 

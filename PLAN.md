@@ -1170,6 +1170,12 @@ terms page, feedback form, uptime (6c).
    Test (`test_rls_alone_stops_the_cross_user_attack_as_the_production_role`): as that role, with the
    application-level read filter and cross-user write check switched off, the every-route attack gives 94 routes,
    0 leaks, 0 errors, Bob's rows unchanged. Self-check with the RLS context forced to "system": 35 leaks.
-2. **Canary test**: see `tests/test_canary.py`.
+2. **Canary test** (`tests/test_canary.py`): Bob holds a stock with a unique symbol, name and note; global jobs run
+   with Bob's canary security failing (so it is the first and only failure everywhere); Alice calls all 47 GET routes
+   and the export; no response and no log line may contain a canary. The first adversarial run found two real leaks:
+   the shared Source health page showed an example error naming Bob's symbol, and price-refresh / live-poll log lines
+   listed failing symbols. Fixed: shared status messages carry counts only; logs carry numeric security ids; error
+   text from per-security fetches has the ticker scrubbed (`outbound(..., private=...)`). Users still see the reason
+   on their own holdings.
 3. **Fail closed**: sign-in required unless `DEV_AUTH=1` and `ENV=development|test`; unset or unknown ENV =
    production (§15.3).

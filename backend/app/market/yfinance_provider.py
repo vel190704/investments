@@ -54,7 +54,8 @@ class YFinanceProvider:
         for r in refs:
             ticker = f"{r.symbol}.NS"
             try:
-                with outbound("yfinance prices", "finance.yahoo.com (yfinance)", ticker=ticker):
+                with outbound("yfinance prices", "finance.yahoo.com (yfinance)", private=(ticker, r.symbol),
+                              security_id=r.security_id):
                     df = yf.Ticker(ticker).history(period="10d", interval="1d", auto_adjust=False)
                     out[r.security_id] = quote_from_history(df, ticker)
             except Exception as e:
