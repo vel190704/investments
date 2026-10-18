@@ -14,6 +14,9 @@ from app.logging_config import configure_logging, event
 
 configure_logging()
 log = logging.getLogger(__name__)
+from app.observability import init_sentry  # noqa: E402
+
+init_sentry()  # no-op unless SENTRY_DSN is set
 
 
 def _startup_refresh() -> None:

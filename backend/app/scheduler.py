@@ -30,7 +30,10 @@ def run_job(name: str, fn, *args, **kwargs):
             event(log, "job_start", job=name)
             try:
                 result = fn(*args, **kwargs)
-            except Exception:
+            except Exception as exc:
+                from app.observability import capture
+
+                capture(exc)
                 event(log, "job_end", logging.ERROR, exc_info=True, job=name, outcome="failed",
                       duration_ms=round((time.perf_counter() - t0) * 1000))
                 return None

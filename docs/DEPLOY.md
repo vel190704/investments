@@ -219,6 +219,7 @@ Backend (Render). The same names in both services, with each environment's own v
 | `CLAUDE_MODEL` | optional | optional | default model id |
 | `FIELD_ENCRYPTION_KEY` | own value | different value | §4 |
 | `LOG_LEVEL`, `LOG_FORMAT` | optional | optional | `LOG_FORMAT=json` suits Render's log search |
+| `SENTRY_DSN` | optional | optional (separate Sentry project) | error monitoring; events are scrubbed (below) |
 | `MAX_REQUEST_BYTES`, `RATE_LIMITS_ENABLED`, `SOURCE_TIMEOUT_SECONDS` | optional | optional | defaults are fine |
 
 Never set on Render: `DEV_AUTH`, `DEV_USER_EMAIL`, `BACKEND_URL`. Render sets `PORT` itself.
@@ -308,3 +309,22 @@ feature branch ──push──▶ GitHub Actions: checks + docker      Vercel: 
 - `https://<backend>/api/health` → `{"status":"ok"}` (uptime monitoring: backups/operations section, 6c).
 - Sign in, open the Dashboard and the Admin page.
 - Render log: one `database_role ... bypassrls=false` line at start, no tracebacks (`level=ERROR`).
+
+## 15. What reaches logs and error monitoring
+
+- **Render's log stream is the app's console output**: the same lines as `logs/app.log`. They carry the request id
+  (`rid=`), the numeric user id (`uid=`), the route **template** (`/api/admin/invites/{email}`, never the raw path),
+  status, durations, counts, numeric security ids and error classes.
+- They never carry financial figures, workbook contents, journal or note text, keys or tokens, or emails. A full
+  user flow is tested for this (`tests/test_privacy_logs.py`), on top of the redaction filter.
+- **Sentry** (only if `SENTRY_DSN` is set): exceptions only, no log lines, breadcrumbs, performance traces or
+  sessions. Each event keeps the request method and route, the numeric user id, and the exception type with its
+  message scrubbed:
+  - keys and tokens redacted;
+  - emails replaced with `<email>`;
+  - numbers of 3+ digits replaced with `<n>`;
+  - quoted text replaced with `<text>`.
+
+  Stack frames keep file, line and function only. A synthetic event full of private values is checked in the
+  tests. In the Sentry project settings, also turn on "Data Scrubber" and "Prevent Storing of IP Addresses" as a
+  second layer.

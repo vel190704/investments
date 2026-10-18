@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     cors_origin_regex: str = ""  # preview service only: e.g. ^https://investments-[a-z0-9-]+-you\.vercel\.app$
     max_request_bytes: int = 10 * 1024 * 1024
     rate_limits_enabled: bool = True
+    sentry_dsn: str = ""  # optional error monitoring; scrubbed events only (app/observability.py)
     # Logging (app/logging_config.py)
     log_level: str = "INFO"
     log_format: str = "kv"  # kv (key=value lines) | json

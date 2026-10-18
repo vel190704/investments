@@ -26,6 +26,13 @@ def _rid(request: Request) -> str:
     return incoming if _RID_OK.match(incoming) else uuid.uuid4().hex[:12]
 
 
+def route_path(request: Request) -> str:
+    """The matched route TEMPLATE (/api/admin/invites/{email}), never the raw path: raw paths can carry emails,
+    ids or symbols. Unmatched requests are logged as "<no route>"."""
+    route = request.scope.get("route")
+    return getattr(route, "path", None) or "<no route>"
+
+
 def validation_summary(errors: list[dict]) -> list[dict]:
     """Field, message and type only: never the submitted values (they may be journal text)."""
     return [{"loc": ".".join(str(x) for x in e.get("loc", ())), "msg": e.get("msg"), "type": e.get("type")}
@@ -76,7 +83,8 @@ def _guard(request: Request) -> JSONResponse | None:
         if wait is None:
             LIMITER.hit(rule.name, key, rule.window_s)
     if wait is not None:
-        event(log, "rate_limited", logging.WARNING, path=request.url.path, retry_after_s=wait)
+        event(log, "rate_limited", logging.WARNING, bucket=rule.name if rule and wait else "auth_fail",
+              retry_after_s=wait)
         return JSONResponse({"detail": f"Too many requests; try again in {wait} s", "request_id": REQUEST_ID.get()},
                             status_code=429, headers={"Retry-After": str(wait)})
     return None
@@ -96,9 +104,12 @@ def install(app: FastAPI) -> None:
                 return refusal
             try:
                 response = await call_next(request)
-            except Exception:
+            except Exception as exc:
+                from app.observability import capture
+
+                capture(exc, str(getattr(request.state, "user_id", "-")))
                 event(log, "http_request", logging.ERROR, exc_info=True, method=request.method,
-                      path=request.url.path, status=500, duration_ms=round((time.perf_counter() - t0) * 1000))
+                      path=route_path(request), status=500, duration_ms=round((time.perf_counter() - t0) * 1000))
                 response = JSONResponse({"detail": "Internal server error (see logs/app.log)", "request_id": rid},
                                         status_code=500)
             else:
@@ -107,7 +118,7 @@ def install(app: FastAPI) -> None:
                          else logging.DEBUG if request.url.path in QUIET_PATHS else logging.INFO)
                 log.log(level, "http_request", extra={
                     "user_id": str(getattr(request.state, "user_id", "-")),
-                    "fields": {"method": request.method, "path": request.url.path, "status": status,
+                    "fields": {"method": request.method, "path": route_path(request), "status": status,
                                "duration_ms": round((time.perf_counter() - t0) * 1000)}})
             if response.status_code == 401:
                 from app.api.limits import AUTH_FAIL_WINDOW_S, LIMITER, client_ip
@@ -122,7 +133,7 @@ def install(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def on_validation_error(request: Request, exc: RequestValidationError):
         errors = validation_summary(exc.errors())
-        event(log, "validation_error", logging.WARNING, method=request.method, path=request.url.path, errors=errors)
+        event(log, "validation_error", logging.WARNING, method=request.method, path=route_path(request), errors=errors)
         return JSONResponse({"detail": jsonable_encoder(exc.errors()), "request_id": REQUEST_ID.get()},
                             status_code=422)
 
@@ -130,7 +141,7 @@ def install(app: FastAPI) -> None:
     async def on_http_error(request: Request, exc: StarletteHTTPException):
         if exc.status_code >= 400:
             event(log, "http_error", logging.ERROR if exc.status_code >= 500 else logging.WARNING,
-                  method=request.method, path=request.url.path, status=exc.status_code,
+                  method=request.method, path=route_path(request), status=exc.status_code,
                   detail=exc.detail if isinstance(exc.detail, str) else jsonable_encoder(exc.detail))
         return JSONResponse({"detail": exc.detail, "request_id": REQUEST_ID.get()}, status_code=exc.status_code,
                             headers=getattr(exc, "headers", None))

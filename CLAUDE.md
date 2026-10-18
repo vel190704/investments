@@ -88,7 +88,9 @@ in-app transaction form) is the only input for holdings and transactions.** See 
   `jobs.for_each_user`.
 - Auth: Supabase JWT (JWKS/HS256) and the invite list; fail closed: the local fake user needs
   `DEV_AUTH=1` AND `ENV=development|test`; unset/unknown ENV = production; never weaken this.
-- Logs carry the numeric user id (`uid=`), never emails, financial figures, workbook contents or journal text.
+- Logs carry the numeric user id (`uid=`) and route templates (never raw paths), never emails, financial figures,
+  workbook contents or journal text (`tests/test_privacy_logs.py`). Sentry (`app/observability.py`, optional) sends
+  scrubbed exceptions only; keep `scrub_event` and its test in step with any new event data.
 - Shared status (source health, refresh runs, logs) never names a security: counts and numeric security ids only;
   pass the ticker as `private=` to `outbound()` so fetch errors are scrubbed. `tests/test_canary.py` enforces it.
 - Postgres-only behaviour (string lengths, RLS, advisory locks) is tested with `make pg-up && make test-postgres`;
