@@ -110,6 +110,10 @@ def test_cross_user_attack_on_postgres(pg_url, tmp_path, monkeypatch):
 
 def test_sqlite_to_postgres_tool_keeps_totals_identical(pg_url, tmp_path, workbook):
     """A single-user (pre-Phase-6 shape) SQLite file moves into one Postgres account with identical totals."""
+    import os
+
+    if os.environ.get("TEST_ALL_ON_POSTGRES") == "1":
+        pytest.skip("needs a real SQLite source file (runs under `make test-postgres`)")
     from app.importer.run import import_workbook
     from app.market.base import Quote
     from app.market.service import store_quote
