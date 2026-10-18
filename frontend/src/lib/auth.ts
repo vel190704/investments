@@ -2,7 +2,7 @@
 
 // Sign-in with Supabase Auth (invite-only magic link). Only the public project URL and publishable ("anon") key are
 // used here; both are designed to be public. No secrets in client code: the service-role key and the AI key live on
-// the backend only. In dev mode (NEXT_PUBLIC_AUTH_MODE=dev) there is no sign-in: the backend uses a local user.
+// the backend only. Only with NEXT_PUBLIC_DEV_AUTH=1 (local dev) is there no sign-in: the backend uses a local user.
 
 import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
@@ -10,7 +10,8 @@ import { useEffect, useState } from "react";
 // Static references: Next.js inlines NEXT_PUBLIC_* values at build time.
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
-export const AUTH_MODE: "dev" | "supabase" = process.env.NEXT_PUBLIC_AUTH_MODE === "supabase" ? "supabase" : "dev";
+// Fail closed: sign-in is required unless NEXT_PUBLIC_DEV_AUTH is exactly "1" (local `make dev` sets it).
+export const AUTH_MODE: "dev" | "supabase" = process.env.NEXT_PUBLIC_DEV_AUTH === "1" ? "dev" : "supabase";
 export const PUBLIC_PATHS = ["/login", "/auth/callback", "/terms"];
 
 let client: SupabaseClient | null = null;

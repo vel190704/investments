@@ -6,6 +6,8 @@ import openpyxl
 import pytest
 
 os.environ["SCHEDULER_ENABLED"] = "false"
+os.environ["ENV"] = "test"  # tests use the explicit local dev user (X-Dev-User); production always needs sign-in
+os.environ["DEV_AUTH"] = "1"
 import tempfile  # noqa: E402
 os.environ.setdefault("LOG_DIR", tempfile.mkdtemp(prefix="investments-test-logs-"))  # never the repo logs/
 

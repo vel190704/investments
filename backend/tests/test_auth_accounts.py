@@ -25,8 +25,8 @@ def token(email="alice@example.com", sub="11111111-1111-1111-1111-111111111111",
 @pytest.fixture
 def supa(tmp_path, monkeypatch):
     st = get_settings()
-    for k, v in {"auth_mode": "supabase", "supabase_url": SUPA, "supabase_jwt_secret": SECRET,
-                 "admin_emails": "owner@example.com", "environment": "production"}.items():
+    for k, v in {"dev_auth": "", "supabase_url": SUPA, "supabase_jwt_secret": SECRET,
+                 "admin_emails": "owner@example.com", "env": "production"}.items():
         monkeypatch.setattr(st, k, v)
     db.configure(f"sqlite:///{tmp_path / 'a.db'}")
     with TestClient(app_()) as c:
@@ -68,16 +68,44 @@ def test_invite_only_and_admin_bootstrap(supa):
     assert r.status_code == 403 and "invitation was removed" in r.json()["detail"]
 
 
-def test_dev_mode_is_refused_in_production(monkeypatch):
+@pytest.mark.parametrize("env, dev_auth, supabase, outcome", [
+    ("development", "1", "", "dev"),          # the only ways to get the fake local user
+    ("test", "1", "", "dev"),
+    ("production", "1", SUPA, "refuse"),      # DEV_AUTH outside development/test refuses to start
+    ("preview", "1", SUPA, "refuse"),         # preview deployments are real deployments
+    ("", "1", SUPA, "refuse"),                # unset ENV = production
+    ("staging", "1", SUPA, "refuse"),         # unknown ENV = production
+    ("development", "", SUPA, "auth"),        # DEV_AUTH not set: sign-in required even locally
+    ("development", "true", SUPA, "auth"),    # only the exact value "1" enables it
+    ("", "", SUPA, "auth"),
+    ("", "", "", "refuse"),                   # no auth configured at all: refuse to start
+    ("development", "", "", "refuse"),
+])
+def test_authentication_fails_closed(monkeypatch, env, dev_auth, supabase, outcome):
     st = get_settings()
-    monkeypatch.setattr(st, "environment", "production")
-    monkeypatch.setattr(st, "auth_mode", "dev")
-    with pytest.raises(RuntimeError, match="AUTH_MODE must be 'supabase'"):
-        auth.check_startup_config()
-    monkeypatch.setattr(st, "auth_mode", "supabase")
-    monkeypatch.setattr(st, "supabase_url", "")
-    with pytest.raises(RuntimeError, match="SUPABASE_URL"):
-        auth.check_startup_config()
+    monkeypatch.setattr(st, "env", env)
+    monkeypatch.setattr(st, "dev_auth", dev_auth)
+    monkeypatch.setattr(st, "supabase_url", supabase)
+    if outcome == "refuse":
+        with pytest.raises(RuntimeError):
+            auth.check_startup_config()
+        return
+    auth.check_startup_config()
+    assert auth.dev_auth_active() is (outcome == "dev")
+    assert auth.effective_env() == (env if env in auth.KNOWN_ENVS else "production")
+
+
+def test_without_dev_auth_requests_need_a_token(tmp_path, monkeypatch):
+    st = get_settings()
+    monkeypatch.setattr(st, "env", "development")
+    monkeypatch.setattr(st, "dev_auth", "")
+    monkeypatch.setattr(st, "supabase_url", SUPA)
+    monkeypatch.setattr(st, "supabase_jwt_secret", SECRET)
+    db.configure(f"sqlite:///{tmp_path / 'fc.db'}")
+    with TestClient(app_()) as c:
+        assert c.get("/api/me").status_code == 401
+        assert c.get("/api/me", headers={"X-Dev-User": "owner@localhost"}).status_code == 401  # header ignored
+        assert c.get("/api/health").status_code == 200
 
 
 def test_asymmetric_tokens_via_jwks(monkeypatch):

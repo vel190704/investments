@@ -1081,8 +1081,9 @@ applied silently). Prices, facts and sectors are read through that link.
 - The backend verifies the Supabase access token on every request: signature (JWKS, asymmetric keys; or the
   legacy HS256 secret), `exp`, `aud = authenticated`, `iss = <project>/auth/v1`. Unknown or un-invited users
   get 403.
-- Dev mode (`AUTH_MODE=dev`): a local fake user, plus `X-Dev-User: email` for tests. The app refuses to start
-  with `AUTH_MODE=dev` when `ENVIRONMENT=production`.
+- Dev mode only with an explicit `DEV_AUTH=1` AND `ENV=development|test` (follow-up to 6a: fail closed). Unset or
+  unknown `ENV` means production; `DEV_AUTH=1` anywhere else refuses to start; without dev auth the app needs Supabase
+  settings or refuses to start. Frontend: sign-in unless `NEXT_PUBLIC_DEV_AUTH=1`.
 - The first admin comes from `ADMIN_EMAILS`.
 
 ### 15.4 Jobs (6a)

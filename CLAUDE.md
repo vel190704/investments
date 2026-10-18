@@ -75,7 +75,8 @@ in-app transaction form) is the only input for holdings and transactions.** See 
   there (the test fails on uncovered routes). Postgres RLS (migration 0009) is defence in depth.
 - Jobs run once globally (`app/jobs.py`, `scheduler.run_job` under `job_lock`); per-user steps loop users with
   `jobs.for_each_user`.
-- Auth: Supabase JWT (JWKS/HS256) and the invite list; `AUTH_MODE=dev` is local only and refused in production.
+- Auth: Supabase JWT (JWKS/HS256) and the invite list; fail closed: the local fake user needs
+  `DEV_AUTH=1` AND `ENV=development|test`; unset/unknown ENV = production; never weaken this.
 - Logs carry the numeric user id (`uid=`), never emails, financial figures, workbook contents or journal text.
 - Postgres-only behaviour (string lengths, RLS, advisory locks) is tested with `make pg-up && make test-postgres`;
   `make test-all-postgres` runs the whole suite on Postgres.

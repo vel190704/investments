@@ -1,11 +1,11 @@
 """Authentication and the request-scoped user (Phase 6).
 
-Production (`AUTH_MODE=supabase`): every request carries `Authorization: Bearer <Supabase access token>`. The token
+Default (fail closed): every request carries `Authorization: Bearer <Supabase access token>`. The token
 is verified here (signature via the project's JWKS, or the legacy HS256 secret; `exp`, `aud`, `iss`), then the
 email must be invited (`allowed_emails`) or listed in ADMIN_EMAILS. Unknown users get 403.
 
-Development (`AUTH_MODE=dev`): a local fake user (DEV_USER_EMAIL), or `X-Dev-User: <email>` for tests. Refused when
-ENVIRONMENT=production.
+Development only (`DEV_AUTH=1` and `ENV=development|test`): a local fake user (DEV_USER_EMAIL), or
+`X-Dev-User: <email>` for tests. Unset or unknown ENV means production; DEV_AUTH=1 there refuses to start.
 
 Routes get a session bound to the user via `get_session`; app/tenancy.py does the per-user filtering.
 """
@@ -47,12 +47,29 @@ class AuthError(Exception):
         self.status, self.message = status, message
 
 
+KNOWN_ENVS = ("development", "test", "preview", "production")
+DEV_ENVS = ("development", "test")
+
+
+def effective_env() -> str:
+    """ENV as the app treats it: unset or unknown values mean production (fail closed)."""
+    e = get_settings().env.strip().lower()
+    return e if e in KNOWN_ENVS else "production"
+
+
+def dev_auth_active() -> bool:
+    """The local fake user is used only with an explicit DEV_AUTH=1 AND ENV=development|test."""
+    return get_settings().dev_auth.strip() == "1" and effective_env() in DEV_ENVS
+
+
 def check_startup_config() -> None:
     st = get_settings()
-    if st.environment == "production" and st.auth_mode != "supabase":
-        raise RuntimeError("AUTH_MODE must be 'supabase' in production (dev mode uses a fake user)")
-    if st.auth_mode == "supabase" and not st.supabase_url:
-        raise RuntimeError("AUTH_MODE=supabase needs SUPABASE_URL")
+    if st.dev_auth.strip() == "1" and not dev_auth_active():
+        raise RuntimeError(f"DEV_AUTH=1 is allowed only with ENV=development or ENV=test; ENV is "
+                           f"{st.env.strip() or 'unset'}, which is treated as production. Remove DEV_AUTH.")
+    if not dev_auth_active() and not st.supabase_url:
+        raise RuntimeError("Authentication is required: set SUPABASE_URL (or, for local development only, "
+                           "ENV=development and DEV_AUTH=1).")
 
 
 def admin_emails() -> set[str]:
@@ -133,9 +150,7 @@ def resolve_user(email: str, subject: str | None, dev: bool = False) -> CurrentU
 
 def authenticate(request: Request) -> CurrentUser:
     st = get_settings()
-    if st.auth_mode == "dev":
-        if st.environment == "production":
-            raise AuthError(500, "dev auth is disabled in production")
+    if dev_auth_active():
         email = request.headers.get("x-dev-user") or st.dev_user_email
         return resolve_user(email, None, dev=True)
     auth = request.headers.get("authorization", "")

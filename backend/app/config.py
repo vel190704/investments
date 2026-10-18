@@ -24,8 +24,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     claude_model: str = ""  # default LLM model (Settings can override)
     # Phase 6: deployment and accounts
-    environment: str = "development"  # development | preview | production
-    auth_mode: str = "dev"  # dev (local fake user; refused in production) | supabase
+    # Fail closed: unset or unknown ENV behaves as production. Sign-in is required unless DEV_AUTH=1 AND
+    # ENV is development or test (app/auth.py::dev_auth_active).
+    env: str = ""  # development | test | preview | production
+    dev_auth: str = ""  # "1" = local fake user (development/test only; refused anywhere else)
     dev_user_email: str = "owner@localhost"  # dev mode: the local user (owner of migrated single-user data)
     admin_emails: str = ""  # comma-separated; these users are admins (and always allowed)
     supabase_url: str = ""  # https://<project>.supabase.co

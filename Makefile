@@ -31,16 +31,19 @@ setup: hooks
 	$(BIN)/pip install -q -r backend/requirements.txt
 	cd frontend && npm install
 
+# Local development uses the fake local user explicitly; anything else requires sign-in (fail closed).
+LOCAL_DEV := ENV=development DEV_AUTH=1
+
 backend:
-	cd backend && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+	cd backend && $(LOCAL_DEV) .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 
 frontend:
-	cd frontend && npm run dev
+	cd frontend && NEXT_PUBLIC_DEV_AUTH=1 npm run dev
 
 dev:
 	@trap 'kill 0' INT TERM EXIT; \
-	(cd backend && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload) & \
-	(cd frontend && npm run dev) & \
+	(cd backend && $(LOCAL_DEV) .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload) & \
+	(cd frontend && NEXT_PUBLIC_DEV_AUTH=1 npm run dev) & \
 	wait
 
 test: test-backend test-frontend

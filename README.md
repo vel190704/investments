@@ -97,10 +97,12 @@ make migrate        # apply migrations now (backs up first)
 
 ## Accounts and isolation (Phase 6)
 
-- **Local development** (`AUTH_MODE=dev`, the default): no sign-in; you are `DEV_USER_EMAIL`
+- **Local development** (`make dev` sets `ENV=development DEV_AUTH=1`): no sign-in; you are `DEV_USER_EMAIL`
   (default `owner@localhost`, an admin). An existing single-user database is upgraded in place
   (migration 0008) and all its data becomes this user's.
-- **Production** (`AUTH_MODE=supabase`): sign-in by email magic link; only invited emails get in
+- **Everywhere else** sign-in is required (fail closed): unset or unknown `ENV` counts as production,
+  `DEV_AUTH=1` outside development/test refuses to start, and without Supabase settings the app
+  refuses to start. Sign-in is by email magic link; only invited emails get in
   (open sign-up is off in Supabase and the backend checks its own invite list). Deployment steps:
   docs/DEPLOY.md (checkpoint 6b).
 - **What is shared:** market data (prices, NAVs, fundamentals, sector lists, news, macro) is
