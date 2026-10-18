@@ -56,6 +56,8 @@ DEFAULTS.update({"rubric": dict(DEFAULT_RUBRIC), "sector_rules": {k: list(v) for
 # Live intraday prices: off until the user turns it on (it makes a request every poll interval in market hours).
 # The holiday table starts empty: dates are entered by hand and verified against the NSE holiday list.
 DEFAULTS.update({"live": {"enabled": False}})
+# Simple mode hides advanced pages from the menu. None = the role's default (on for members, off for admins).
+DEFAULTS.update({"ui": {"simple_mode": None}})
 # Platform-wide sections (one row for everybody, admin-editable). Everything else in DEFAULTS is per user.
 PLATFORM_DEFAULTS: dict[str, dict] = {
     "news": DEFAULTS.pop("news"),
@@ -266,6 +268,12 @@ def validate(section: str, value: dict) -> dict:
 
     if section == "live":
         return {"enabled": bool(value.get("enabled", False))}
+
+    if section == "ui":
+        v = value.get("simple_mode")
+        if v is not None and not isinstance(v, bool):
+            raise SettingsError("simple_mode must be true, false or null (= the default for your role)")
+        return {"simple_mode": v}
 
     if section == "market_holidays":
         rows, seen = [], set()

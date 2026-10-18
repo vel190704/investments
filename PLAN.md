@@ -1248,3 +1248,18 @@ public values are in client code (Supabase URL and publishable key). Security he
 1. Region: Singapore for both Render and Supabase. Mumbai would be closer to users, but Render has no Mumbai region.
 2. Render Starter (always on) for production. The preview backend may use the free instance (sleeps).
 3. Rate-limit numbers are starting points (in `app/api/limits.py`), sized for 5-15 people.
+
+### 15.13 Before 6c (follow-ups)
+1. Pooling: the user context is transaction-local and set at the start of every transaction; the job lock is a
+   transaction-level advisory lock. Tested through PgBouncer in transaction mode (`make test-pooler`, in CI).
+   DEPLOY.md lists the right connection string per use.
+2. `make smoke URL=...`: cross-user canary smoke test against a deployed preview backend (DEPLOY.md §16).
+3. Free-plan-safe releases: `production` branch + `make release` (green CI for the exact commit, fast-forward only;
+   DEPLOY.md §17).
+4. Deletion and backups: Terms page states immediate live deletion and backup retention
+   (`NEXT_PUBLIC_BACKUP_RETENTION_DAYS`); admin procedure in DEPLOY.md §18.
+5. Logs and Sentry: route templates in logs; optional scrubbed Sentry; privacy tests for both.
+6. Simple mode, per user (`ui.simple_mode`; unset = on for members, off for admins). Assumption: "advanced pages"
+   means exactly Valuation & peers, Fund look-through, Fundamentals and Macro & scenarios. Every other page stays in
+   the menu (the six named core pages are guaranteed by a test); hidden pages remain reachable by URL with a note.
+

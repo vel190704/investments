@@ -26,6 +26,7 @@ export default function AccountPage() {
             <Button variant="outline" onClick={() => apiDownload("/onboarding/template.xlsx", "investment_tracker_template.xlsx")}>Blank template</Button>
           </div>
         </Section>
+        <SimpleMode simple={me.simple_mode} chosen={me.simple_mode_chosen} isAdmin={me.is_admin} onSaved={reload} />
         <Section title="AI analysis">
           <p className="text-sm">
             {me.ai.ai_enabled_by_admin
@@ -90,6 +91,34 @@ function DeleteAccount({ email }: { email: string }) {
         <Field label={`Type ${email} to confirm`}><Input className="w-80" value={confirm} onChange={(e) => setConfirm(e.target.value)} /></Field>
         <Button variant="destructive" disabled={confirm.trim().toLowerCase() !== email.toLowerCase()} onClick={del}>Delete everything</Button>
       </div>
+      {err && <ErrorBox message={err} />}
+    </Section>
+  );
+}
+
+function SimpleMode({ simple, chosen, isAdmin, onSaved }: { simple: boolean; chosen: boolean | null; isAdmin: boolean;
+                                                           onSaved: () => void }) {
+  const [err, setErr] = useState<string | null>(null);
+  async function set(value: boolean | null) {
+    try {
+      await apiPut("/settings/ui", { simple_mode: value });
+      setErr(null);
+      onSaved();
+    } catch (e) {
+      setErr(errorText(e));
+    }
+  }
+  return (
+    <Section title="Simple mode" aside={simple ? "On" : "Off"}>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-1" checked={simple} onChange={(e) => set(e.target.checked)} />
+        <span>Show a shorter menu: hides the advanced pages (Valuation &amp; peers, Fund look-through, Fundamentals,
+          Macro &amp; scenarios). Everything still works and those pages stay reachable by link.</span>
+      </label>
+      <p className="mt-1 text-xs text-muted-foreground">
+        {chosen === null ? `Default for ${isAdmin ? "admins: off" : "members: on"}.`
+          : <>Your choice. <button className="underline" onClick={() => set(null)}>Use the default</button></>}
+      </p>
       {err && <ErrorBox message={err} />}
     </Section>
   );

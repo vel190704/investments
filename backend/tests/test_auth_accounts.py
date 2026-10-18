@@ -259,3 +259,18 @@ def test_changed_encryption_key_blocks_own_key_use_without_falling_back(session,
     assert an.gate(session) is None and an._api_key(session) == ("sk-ant-api03-" + "Y" * 40, True)
     monkeypatch.setattr(st_, "field_encryption_key", Fernet.generate_key().decode())  # the secret changed
     assert "cannot be decrypted" in an.gate(session)
+
+
+def test_simple_mode_defaults_by_role_and_can_be_chosen(tmp_path):
+    db.configure(f"sqlite:///{tmp_path / 'ui.db'}")
+    with TestClient(app_()) as c:
+        member, admin = {"X-Dev-User": "friend@example.com"}, {}  # the default dev user is the admin
+        assert c.get("/api/me", headers=member).json()["simple_mode"] is True
+        assert c.get("/api/me", headers=admin).json()["simple_mode"] is False
+        assert c.put("/api/settings/ui", headers=member, json={"simple_mode": False}).status_code == 200
+        me = c.get("/api/me", headers=member).json()
+        assert me["simple_mode"] is False and me["simple_mode_chosen"] is False
+        assert c.get("/api/me", headers={"X-Dev-User": "other@example.com"}).json()["simple_mode"] is True  # per user
+        assert c.put("/api/settings/ui", headers=member, json={"simple_mode": "yes"}).status_code == 422
+        assert c.put("/api/settings/ui", headers=member, json={"simple_mode": None}).status_code == 200
+        assert c.get("/api/me", headers=member).json()["simple_mode"] is True  # back to the role default

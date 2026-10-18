@@ -4,53 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMe } from "@/components/auth-gate";
 import { AUTH_MODE, PUBLIC_PATHS, signOut } from "@/lib/auth";
+import { GROUPS, visibleGroups } from "@/lib/nav";
 import { cn } from "@/lib/utils";
-
-const GROUPS = [
-  { title: "Overview", links: [
-    { href: "/", label: "Dashboard" },
-    { href: "/history", label: "History" },
-    { href: "/changes", label: "Changes" },
-    { href: "/alerts", label: "Alerts" },
-  ] },
-  { title: "Holdings", links: [
-    { href: "/holdings/stocks", label: "Stocks & ETFs" },
-    { href: "/holdings/funds", label: "Mutual funds" },
-    { href: "/transactions", label: "Transactions" },
-  ] },
-  { title: "Analysis", links: [
-    { href: "/health", label: "Portfolio health" },
-    { href: "/allocation", label: "Allocation" },
-    { href: "/sectors", label: "Sectors" },
-    { href: "/overlap", label: "Fund look-through" },
-    { href: "/fundamentals", label: "Fundamentals" },
-    { href: "/valuation", label: "Valuation & peers" },
-    { href: "/news", label: "News & announcements" },
-    { href: "/macro", label: "Macro & scenarios" },
-    { href: "/analysis", label: "AI analysis" },
-  ] },
-  { title: "Planning", links: [
-    { href: "/simulator", label: "Next contribution" },
-    { href: "/planner", label: "Monthly planner" },
-    { href: "/projection", label: "Projection" },
-    { href: "/emergency-fund", label: "Emergency fund" },
-    { href: "/journal", label: "Thesis journal" },
-    { href: "/strategy", label: "Strategy vs actual" },
-  ] },
-  { title: "Data", links: [
-    { href: "/monthly", label: "Monthly update" },
-    { href: "/import", label: "Import" },
-    { href: "/mappings", label: "Mappings" },
-    { href: "/classification", label: "Classification" },
-    { href: "/sources", label: "Source health" },
-    { href: "/settings", label: "Settings" },
-  ] },
-  { title: "You", links: [
-    { href: "/account", label: "Account" },
-    { href: "/admin", label: "Admin", adminOnly: true },
-    { href: "/terms", label: "Terms & data" },
-  ] },
-];
 
 export function Nav() {
   const path = usePathname();
@@ -58,12 +13,12 @@ export function Nav() {
   if (PUBLIC_PATHS.includes(path) && path !== "/terms") return null;
   return (
     <nav aria-label="Main" className="flex gap-1 overflow-x-auto md:flex-col md:gap-4 md:overflow-visible">
-      {GROUPS.map((g) => (
+      {visibleGroups(GROUPS, { isAdmin: !!me?.is_admin, simple: !!me?.simple_mode }).map((g) => (
         <div key={g.title} className="flex gap-1 md:flex-col">
           <div className="hidden px-3 text-[11px] font-medium tracking-wide text-muted-foreground/70 uppercase md:block">
             {g.title}
           </div>
-          {g.links.filter((l) => !("adminOnly" in l && l.adminOnly) || me?.is_admin).map((l) => {
+          {g.links.map((l) => {
             const active = l.href === "/" ? path === "/" : path.startsWith(l.href);
             return (
               <Link

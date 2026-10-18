@@ -5,9 +5,11 @@ import { createContext, useContext, useEffect, type ReactNode } from "react";
 import { Loading } from "@/components/common";
 import { useApi } from "@/lib/api";
 import { AUTH_MODE, PUBLIC_PATHS, useSession } from "@/lib/auth";
+import { isAdvanced } from "@/lib/nav";
 
 export type Me = {
   id: number; email: string; role: "admin" | "user"; is_admin: boolean; has_data: boolean;
+  simple_mode: boolean; simple_mode_chosen: boolean | null;
   ai: { calls_this_month: number; cap: number; ai_enabled_by_admin: boolean; own_key: boolean };
 };
 
@@ -41,4 +43,17 @@ function MeLoader({ children }: { children: ReactNode }) {
     );
   }
   return <MeContext.Provider value={{ me: data, reload }}>{children}</MeContext.Provider>;
+}
+
+/** Shown on an advanced page opened directly while simple mode hides it from the menu. */
+export function AdvancedPageNote() {
+  const path = usePathname();
+  const { me } = useMe();
+  if (!me?.simple_mode || !isAdvanced(path)) return null;
+  return (
+    <p className="mb-4 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground">
+      This is an advanced page, hidden from the menu in simple mode. Turn simple mode off on the Account page to
+      list it.
+    </p>
+  );
 }

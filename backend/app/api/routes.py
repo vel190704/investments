@@ -1148,8 +1148,12 @@ def me(user: CurrentUser = Depends(current_user), session: Session = Depends(get
     from app.services.analysis import usage
 
     has_data = (session.scalar(sa_select(sa_func.count()).select_from(Transaction)) or 0) > 0
+    from app.services import settings as st
+
+    chosen = st.get(session, "ui")["simple_mode"]
     return {"id": user.id, "email": user.email, "role": user.role, "is_admin": user.is_admin,
-            "has_data": has_data, "ai": usage(session)}
+            "has_data": has_data, "ai": usage(session),
+            "simple_mode": (not user.is_admin) if chosen is None else chosen, "simple_mode_chosen": chosen}
 
 
 @router.get("/onboarding/template.xlsx")

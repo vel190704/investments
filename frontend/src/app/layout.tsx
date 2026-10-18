@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { AuthGate } from "@/components/auth-gate";
+import { AdvancedPageNote, AuthGate } from "@/components/auth-gate";
 import { Nav } from "@/components/nav";
 import "./globals.css";
 
@@ -22,7 +22,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <Nav />
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
-          <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 md:px-8">{children}</main>
+          <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 md:px-8"><AdvancedPageNote />{children}</main>
           <footer className="border-t border-border px-4 py-4 text-xs text-muted-foreground md:px-8">
             Personal analytics tool, not investment advice. Figures are historical or derived from the stated
             sources and dates; scenarios are mathematical illustrations, not predictions. Nothing here places orders.

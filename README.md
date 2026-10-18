@@ -120,6 +120,9 @@ make migrate        # apply migrations now (backs up first)
 - **Account page:** export my data (Excel), optional own AI key (stored encrypted), delete my
   account and all data.
 - **New users** see a short getting-started guide with a downloadable blank Excel template.
+- **Simple mode** (Account page, per person): a shorter menu without the advanced pages (Valuation & peers,
+  Fund look-through, Fundamentals, Macro & scenarios). On by default for members, off for admins; Dashboard,
+  Holdings, Allocation, Next contribution, Monthly planner and Projection are always in the menu.
 
 **AI for others:** off until the admin enables it per person. The app's key never leaves the
 server. Caps: each person's own cap, the admin's per-person cap (default 10/month) and a global
