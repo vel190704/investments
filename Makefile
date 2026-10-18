@@ -7,7 +7,7 @@ BIN     := $(VENV)/bin
 FILE    ?= data/personal_investment_tracker_clean.xlsx
 
 
-.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals logs logs-errors pg-up test-postgres test-all-postgres test-pooler smoke
+.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals logs logs-errors pg-up test-postgres test-all-postgres test-pooler smoke release
 
 help:
 	@echo "make setup      install backend (venv) + frontend (npm) dependencies"
@@ -24,6 +24,7 @@ help:
 	@echo "make test-all-postgres  the whole backend suite on Postgres"
 	@echo "make test-pooler        user context through PgBouncer in transaction mode (Docker Compose)"
 	@echo "make smoke URL=...      cross-user smoke test against a DEPLOYED preview backend (docs/DEPLOY.md §16)"
+	@echo "make release            fast-forward production to main, only if CI for that commit is green (§17)"
 	@echo "make logs       follow logs/app.log (Ctrl-C to stop)"
 	@echo "make logs-errors  follow WARNING and above only"
 
@@ -122,3 +123,7 @@ test-pooler:
 smoke:
 	@test -n "$(URL)" || { echo "usage: make smoke URL=https://<preview backend>"; exit 2; }
 	cd backend && .venv/bin/python -m app.tools.smoke --url "$(URL)"
+
+# Free-plan-safe release: production branch moves only to a main commit whose CI run passed (docs/DEPLOY.md §17).
+release:
+	cd backend && .venv/bin/python -m app.tools.release

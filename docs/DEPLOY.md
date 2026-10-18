@@ -12,7 +12,8 @@ environments: **production** (`main`) and **preview** (pull requests). Why this 
 **Contents:** 1 Environments · 2 Database role · 3 Email (SMTP) · 4 Encryption secret · 5 Supabase projects ·
 6 Render backend · 7 Vercel frontend · 8 GitHub CI and branch protection · 9 Environment variables (all) ·
 10 First deployment, in order · 11 How a push reaches production · 12 Rollback · 13 Custom domain (optional) ·
-14 After each deploy
+14 After each deploy · 15 Logs and error monitoring · 16 Smoke test · 17 Free-plan release flow · 18 Deletion
+requests and backups
 
 ## 1. Two separate environments: production and preview
 
@@ -198,8 +199,8 @@ Preview service:
 - **Note:** for a *private* repository, branch protection and rulesets need a paid GitHub plan (Pro or Team). On
   GitHub Free:
   - Render still deploys only after checks pass (§6);
-  - but a direct push to `main` would reach Vercel production without waiting. Work through pull requests and
-    never push to `main` directly, or upgrade.
+  - but a direct push to `main` would reach Vercel production without waiting. Use the **`production` branch
+    workflow** instead (§17); it needs no paid plan.
 
 ## 9. Environment variables (names only)
 
@@ -360,3 +361,35 @@ make smoke URL=https://<preview backend>
 It prints `smoke: N requests as A checked for B's canary; PASS` and exits 0, or lists each problem and exits 1.
 Check out the same commit that is deployed, because the route list comes from the code. The same logic runs in
 the test suite (`tests/test_smoke_tool.py`), including a run where it catches a deliberately leaking app.
+
+## 17. Free-plan-safe release flow (`production` branch + `make release`)
+
+Use this instead of branch protection (§8) when your GitHub plan has none for private repositories. Day-to-day work
+lands on `main`, which only ever deploys to **preview**. Production deploys only from a separate `production`
+branch. That branch only moves by fast-forward to a `main` commit whose CI already passed, and only through
+`make release`.
+
+**Settings (once)** — these replace the branch settings in §6–§7:
+
+| where | setting |
+|---|---|
+| Vercel › Project › Settings › Git › **Production Branch** | `production` (every other branch, including `main` and PRs, becomes a Preview deployment with the Preview-scope variables) |
+| Render › **production** service › Settings › Build & Deploy › **Branch** | `production`; Auto-Deploy: **On Commit** (or "After CI Checks Pass"; CI re-runs for the pushed commit) |
+| Render › **preview** service › Branch | `main`; Auto-Deploy: **After CI Checks Pass** |
+| GitHub | nothing to configure; CI already runs on every branch |
+
+**Each release:**
+1. Work and push to `main`, through pull requests or directly. CI runs; the preview environment updates.
+2. Run the smoke test against preview: `make smoke URL=<preview backend>` (§16).
+3. `make release`. It refuses unless:
+   - the GitHub CLI is installed and signed in (`gh auth login`);
+   - you are on `main` with a clean tree, identical to `origin/main`;
+   - `production` can be fast-forwarded (never a force push);
+   - the **latest** CI run for exactly this commit completed with **success**. A newer failure outweighs an older
+     success; a run still in progress means wait.
+4. It lists the commits that will ship and asks you to type `yes`. Then it pushes `<commit>:production`.
+   Vercel builds the production frontend; Render runs the release step (`alembic upgrade head`), checks health
+   and switches over.
+
+**Rollback** in this flow: the dashboard rollbacks in §12 work the same way. To move `production` back for good,
+revert on `main` (`git revert`), let CI pass, and `make release` again. Never reset or force-push `production`.
