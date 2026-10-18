@@ -7,7 +7,7 @@ BIN     := $(VENV)/bin
 FILE    ?= data/personal_investment_tracker_clean.xlsx
 
 
-.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals logs logs-errors
+.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals logs logs-errors pg-up test-postgres test-all-postgres
 
 help:
 	@echo "make setup      install backend (venv) + frontend (npm) dependencies"
@@ -19,6 +19,9 @@ help:
 	@echo "make fundamentals  fetch fundamentals from Yahoo Finance now (also weekly, Sundays)"
 	@echo "make backup     copy the SQLite DB to data/backups/"
 	@echo "make migrate    apply DB migrations (backs up first; also runs on backend start)"
+	@echo "make pg-up      start a throwaway local Postgres in Docker for tests (127.0.0.1:55432)"
+	@echo "make test-postgres      Postgres-only tests (RLS, advisory locks, isolation on Postgres, data move)"
+	@echo "make test-all-postgres  the whole backend suite on Postgres"
 	@echo "make logs       follow logs/app.log (Ctrl-C to stop)"
 	@echo "make logs-errors  follow WARNING and above only"
 
@@ -86,3 +89,18 @@ logs:
 logs-errors:
 	@test -f $(LOG) || { echo "No $(LOG) yet: start the backend (make dev)"; exit 1; }
 	tail -n 2000 -F $(LOG) | grep --line-buffered -E '(level=|"level": ?")(WARNING|ERROR|CRITICAL)|^Traceback|^  File |^[A-Za-z_.]+(Error|Exception)'
+
+# Local, throwaway Postgres for tests only (never real data; the password is not a secret).
+PG_TEST_URL ?= postgresql+psycopg://postgres:localtest@127.0.0.1:55432/postgres
+
+pg-up:
+	docker start inv-pg-test >/dev/null 2>&1 || docker run -d --name inv-pg-test -e POSTGRES_PASSWORD=localtest \
+		-p 127.0.0.1:55432:5432 postgres:17-alpine >/dev/null
+	@echo "Postgres for tests on 127.0.0.1:55432"
+
+test-postgres:
+	cd backend && TEST_POSTGRES_URL=$(PG_TEST_URL) .venv/bin/python -m pytest -q -p no:warnings tests/test_postgres.py
+
+test-all-postgres:
+	cd backend && TEST_ALL_ON_POSTGRES=1 TEST_POSTGRES_URL=$(PG_TEST_URL) .venv/bin/python -m pytest -q -p no:warnings \
+		--deselect tests/test_migrations.py

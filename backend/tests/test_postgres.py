@@ -106,3 +106,30 @@ def test_cross_user_attack_on_postgres(pg_url, tmp_path, monkeypatch):
         ids = iso._bob_objects(c, tmp_path, b_book)
         problems, changed, covered = iso._attack(c, ids, a_book)
     assert problems == [] and changed == {} and len(covered) > 80
+
+
+def test_sqlite_to_postgres_tool_keeps_totals_identical(pg_url, tmp_path, workbook):
+    """A single-user (pre-Phase-6 shape) SQLite file moves into one Postgres account with identical totals."""
+    from app.importer.run import import_workbook
+    from app.market.base import Quote
+    from app.market.service import store_quote
+    from app.models import Instrument
+    from app.services.snapshots import take_snapshot
+    from app.tools import sqlite_to_postgres as tool
+    from datetime import date
+    from decimal import Decimal as D
+    from sqlalchemy import select
+
+    src = tmp_path / "single.db"
+    db.configure(f"sqlite:///{src}")
+    db.init_db()
+    uid = make_user("owner@localhost")  # what 0008 names the owner of a single-user file
+    with db.session_scope(user_id=uid) as s:
+        assert import_workbook(s, workbook)["ok"]
+        for i in s.scalars(select(Instrument).where(Instrument.symbol.is_not(None))):
+            store_quote(s, i.id, Quote(D("123.45"), date(2026, 10, 16), "t", i.symbol, D("120")))
+        take_snapshot(s, on_date=date(2026, 10, 16))
+    db.get_engine().dispose()
+    assert tool.main(["--sqlite", str(src), "--postgres", pg_url, "--owner-email", "me@example.com"]) == 0
+    with pytest.raises(SystemExit, match="already has accounts"):  # never into a database that has accounts
+        tool.copy_all(f"sqlite:///{src}", pg_url, "me@example.com")
