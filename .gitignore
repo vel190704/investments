@@ -30,3 +30,12 @@ next-env.d.ts
 
 # logs (backend: logs/app.log, rotated)
 logs/
+
+# backups and deletion registers never live in the repo (make backup-prod writes outside it)
+*.dump
+*.dump.*
+*.pgdump
+*.gpg
+*.age
+*.sql.gz
+deletions*.csv

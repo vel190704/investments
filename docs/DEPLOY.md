@@ -424,8 +424,9 @@ the person.
 6. **Confirm in writing:** "Your account and data were deleted from the live system on <date>. Copies in
    automatic backups expire by <date + retention days>."
 7. **If you ever restore a backup** while a register entry is still within the retention window: before reopening
-   the app, delete each such person again (Admin page, and Supabase › Authentication › Users, because sign-in
-   accounts are restored too), then check the Admin page.
+   the app, run `make reapply-deletions REGISTER=<register>` against the restored database (docs/OPERATIONS.md
+   §1.4). Also delete them in Supabase › Authentication › Users if the service-role key isn't set, because a
+   Supabase restore brings sign-in accounts back too. Then check the Admin page.
 
 Deleting a person never touches anyone else's data; the deletion is per-user tables only and is tested
 (`test_admin_can_delete_a_users_data_completely`).

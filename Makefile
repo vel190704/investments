@@ -7,7 +7,7 @@ BIN     := $(VENV)/bin
 FILE    ?= data/personal_investment_tracker_clean.xlsx
 
 
-.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals logs logs-errors pg-up test-postgres test-all-postgres test-pooler smoke release
+.PHONY: check hooks help setup backend frontend dev test test-backend test-frontend import refresh lint backup migrate fundamentals logs logs-errors pg-up test-postgres test-all-postgres test-pooler smoke release backup-prod restore-test reapply-deletions test-backup
 
 help:
 	@echo "make setup      install backend (venv) + frontend (npm) dependencies"
@@ -25,6 +25,10 @@ help:
 	@echo "make test-pooler        user context through PgBouncer in transaction mode (Docker Compose)"
 	@echo "make smoke URL=...      cross-user smoke test against a DEPLOYED preview backend (docs/DEPLOY.md §16)"
 	@echo "make release            fast-forward production to main, only if CI for that commit is green (§17)"
+	@echo "make backup-prod        encrypted pg_dump of production, outside the repo (docs/OPERATIONS.md)"
+	@echo "make restore-test       restore the latest dump into a throwaway Postgres and verify it"
+	@echo "make reapply-deletions REGISTER=path   after a restore: delete again everyone in the register"
+	@echo "make test-backup        backup/restore/register tests against a synthetic database (CI)"
 	@echo "make logs       follow logs/app.log (Ctrl-C to stop)"
 	@echo "make logs-errors  follow WARNING and above only"
 
@@ -127,3 +131,17 @@ smoke:
 # Free-plan-safe release: production branch moves only to a main commit whose CI run passed (docs/DEPLOY.md §17).
 release:
 	cd backend && .venv/bin/python -m app.tools.release
+
+# Backups (docs/OPERATIONS.md). Credentials only in your shell; dumps only outside the repository.
+backup-prod:
+	cd backend && .venv/bin/python -m app.tools.backup backup
+
+restore-test:
+	cd backend && .venv/bin/python -m app.tools.backup restore-test $(if $(DUMP),--dump "$(DUMP)",)
+
+reapply-deletions:
+	@test -n "$(REGISTER)" || { echo "usage: make reapply-deletions REGISTER=/path/outside/repo/deletions.csv"; exit 2; }
+	cd backend && .venv/bin/python -m app.tools.backup reapply-deletions --register "$(REGISTER)"
+
+test-backup:
+	cd backend && TEST_POSTGRES_URL=$(PG_TEST_URL) .venv/bin/python -m pytest -q -p no:warnings tests/test_backup.py

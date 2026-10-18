@@ -54,6 +54,8 @@ jobs:
         run: make test-all-postgres
       - name: User context through PgBouncer in transaction mode (like Supabase's transaction pooler)
         run: make test-pooler
+      - name: Backup, restore test and deletion register against a synthetic database (Docker + gpg)
+        run: make test-backup
 
   docker:
     runs-on: ubuntu-latest

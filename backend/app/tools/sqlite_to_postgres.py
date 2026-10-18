@@ -25,36 +25,20 @@ from pathlib import Path
 
 from sqlalchemy import create_engine, func, select, text
 
-TOTAL_KEYS = ("total_value_paise", "total_invested_paise", "invested_in_priced_paise", "pnl_paise",
-              "today_change_paise", "realised_paise", "dividends_paise", "open_holdings", "transactions", "snapshots",
-              "latest_snapshot")
+from app.tools.totals import TOTAL_KEYS, totals_in_session, user_id_for
 
 
 def totals(url: str, email: str) -> dict:
     """The owner's portfolio totals, computed by the app's own services on the given database."""
     from app import db
-    from app.models import PortfolioSnapshot, Transaction, User
-    from app.services.portfolio import load_rows, summary
 
     db.configure(url)
     with db.session_scope(system=True) as s:
-        uid = s.scalar(select(User.id).where(func.lower(User.email) == email.lower()))
+        uid = user_id_for(s, email)
     if uid is None:
         raise SystemExit(f"no account {email!r} in that database")
     with db.session_scope(user_id=uid) as s:
-        sm = summary(s)
-        snaps = list(s.scalars(select(PortfolioSnapshot).order_by(PortfolioSnapshot.snapshot_date)))
-        latest = snaps[-1] if snaps else None
-        out = {
-            **{k: sm[k] for k in ("total_value_paise", "total_invested_paise", "invested_in_priced_paise", "pnl_paise",
-                                  "realised_paise", "dividends_paise")},
-            "today_change_paise": sm["today_change"]["paise"],
-            "open_holdings": len(load_rows(s)[0]),
-            "transactions": s.scalar(select(func.count()).select_from(Transaction)),
-            "snapshots": len(snaps),
-            "latest_snapshot": (latest.snapshot_date.isoformat(), latest.total_value_paise, latest.total_invested_paise)
-            if latest else None,
-        }
+        out = totals_in_session(s)
     db.get_engine().dispose()
     return out
 
