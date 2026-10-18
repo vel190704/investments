@@ -1179,3 +1179,10 @@ terms page, feedback form, uptime (6c).
    on their own holdings.
 3. **Fail closed**: sign-in required unless `DEV_AUTH=1` and `ENV=development|test`; unset or unknown ENV =
    production (§15.3).
+4. **Confirm all exact matches** (Mappings): `GET /mappings/exact-matches` lists what would be confirmed and what is
+   left for manual review (nothing changes); `POST /mappings/confirm-exact` confirms only listed candidates that are
+   still in the safe set, recomputed on the server. Safe = ISIN from an exact NSE symbol match as the only pending
+   candidate (score 1.0), or a scheme code scoring >= 0.90 and leading the next candidate by >= 0.15
+   (`app/resolve/bulk.py`). Assumption: these thresholds; ambiguous or lower-scoring proposals always need a person.
+5. **DEPLOY.md** gains SMTP for magic links, where `FIELD_ENCRYPTION_KEY` lives and what changing it does, and the
+   rule that preview deployments never receive production database or Supabase credentials.

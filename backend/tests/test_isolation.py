@@ -162,6 +162,8 @@ def _body(method: str, path: str, ids: dict, a_book):
     elif p == "/api/disclosures":
         kw["files"] = {"file": ("d.xlsx", a_book.read_bytes())}
         kw["params"] = {"instrument_id": b["fund"], "kind": "INDEX_WEIGHTS", "as_of": "2026-09-30", "index_name": "X"}
+    elif p == "/api/mappings/confirm-exact":
+        kw["json"] = {"candidate_ids": [b["cid"]]}
     elif p == "/api/import/confirm":
         kw["json"] = {"token": b["token"]}
     elif p == "/api/transactions" and method == "POST":

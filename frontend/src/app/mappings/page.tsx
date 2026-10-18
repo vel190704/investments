@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ErrorBox, Loading, Notice, PageHeader, Section } from "@/components/common";
 import { Button } from "@/components/ui/button";
-import { apiPost, useApi, type Candidate, type MappingRow, type Mappings } from "@/lib/api";
+import { apiGet, apiPost, errorText, useApi, type Candidate, type MappingRow, type Mappings } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +36,7 @@ export default function MappingsPage() {
         subtitle="ISINs come from NSE's securities lists (exact symbol match); AMFI scheme codes from NAVAll.txt (same plan & option, ranked by name similarity). Nothing is applied until you confirm it."
         actions={<Button variant="outline" disabled={busy} onClick={() => act("/mappings/resolve")}>Re-run matching</Button>}
       />
+      {data && data.pending > 0 && <ExactMatches onDone={reload} />}
       {error && <ErrorBox message={error} />}
       {loading && !data && <Loading />}
       {msg && <Notice>{msg}</Notice>}
@@ -123,5 +124,71 @@ function CandidateItem({ c, best, busy, act }: { c: Candidate; best: boolean; bu
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => act(`/mappings/candidates/${c.id}/reject`)}>Reject</Button>
       </div>
     </li>
+  );
+}
+
+type ExactPlan = {
+  apply: { candidate_id: number; instrument_id: number; name: string; kind: string; value: string; label: string; score: number; why: string }[];
+  manual: { instrument_id: number; name: string; kind: string; reason: string }[];
+  rules: { high_score: number; min_margin: number };
+};
+
+/** Lists the proposed exact / high-confidence matches first; confirms only those, leaving the rest for review. */
+function ExactMatches({ onDone }: { onDone: () => Promise<void> | void }) {
+  const [p, setP] = useState<ExactPlan | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function show() {
+    setMsg(null);
+    try { setP(await apiGet<ExactPlan>("/mappings/exact-matches")); } catch (e) { setMsg({ ok: false, text: errorText(e) }); }
+  }
+  async function confirm() {
+    if (!p) return;
+    setBusy(true);
+    try {
+      const r = await apiPost<{ confirmed: number[]; skipped: { reason: string }[] }>("/mappings/confirm-exact",
+        { candidate_ids: p.apply.map((a) => a.candidate_id) });
+      setMsg({ ok: true, text: `Confirmed ${r.confirmed.length}.` + (r.skipped.length ? ` Skipped ${r.skipped.length} that are no longer exact matches.` : "") });
+      setP(null);
+      await onDone();
+    } catch (e) {
+      setMsg({ ok: false, text: errorText(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Section title="Confirm all exact matches" aside="nothing changes until you confirm">
+      {!p ? (
+        <Button variant="outline" onClick={show}>Show exact matches…</Button>
+      ) : (
+        <div className="flex flex-col gap-3 text-sm">
+          <p className="text-xs text-muted-foreground">
+            Exact = an ISIN from an exact NSE symbol match, or a scheme code scoring at least {p.rules.high_score.toFixed(2)} and
+            ahead of the next candidate by {p.rules.min_margin.toFixed(2)} or more. Everything else stays below for you to review.
+          </p>
+          {p.apply.length === 0 ? <p>No exact matches to confirm.</p> : (
+            <ul className="flex flex-col">
+              {p.apply.map((a) => (
+                <li key={a.candidate_id} className="border-b border-border py-1 last:border-0">
+                  <b>{a.name}</b> → {a.kind === "ISIN" ? "ISIN" : "scheme"} <code>{a.value}</code> {a.label !== a.value && <span className="text-muted-foreground">({a.label})</span>}
+                  <span className="text-xs text-muted-foreground"> · {a.why}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {p.manual.length > 0 && (
+            <div className="text-xs text-muted-foreground">
+              Left for manual review: {p.manual.map((m) => `${m.name} (${m.reason})`).join("; ")}.
+            </div>
+          )}
+          <div className="flex gap-2">
+            <Button disabled={busy || p.apply.length === 0} onClick={confirm}>Confirm these {p.apply.length}</Button>
+            <Button variant="ghost" onClick={() => setP(null)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+      {msg && (msg.ok ? <Notice>{msg.text}</Notice> : <ErrorBox message={msg.text} />)}
+    </Section>
   );
 }

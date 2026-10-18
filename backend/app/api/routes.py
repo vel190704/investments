@@ -162,6 +162,47 @@ def mappings(session: Session = Depends(get_session)):
             "pending": sum(1 for x in out if x["status"] != "CONFIRMED")}
 
 
+def _bulk_plan(session: Session) -> dict:
+    from app.resolve.bulk import plan
+
+    rows = mappings(session)["instruments"]
+    return plan([{"instrument_id": r["instrument_id"], "name": r["name"], "needed_kind": r["needed_kind"],
+                  "confirmed": r["status"] == "CONFIRMED", "candidates": r["candidates"]} for r in rows])
+
+
+@router.get("/mappings/exact-matches")
+def mappings_exact_preview(session: Session = Depends(get_session)):
+    """What "Confirm all exact matches" would confirm, and what is left for manual review (nothing is changed)."""
+    return _bulk_plan(session)
+
+
+class ExactConfirmIn(BaseModel):
+    candidate_ids: list[int]
+
+
+@router.post("/mappings/confirm-exact")
+def mappings_confirm_exact(body: ExactConfirmIn, session: Session = Depends(get_session)):
+    """Confirms only the listed candidates that are STILL in the safe set (recomputed here); others are skipped."""
+    safe = {a["candidate_id"] for a in _bulk_plan(session)["apply"]}
+    confirmed, skipped = [], []
+    for cid in body.candidate_ids:
+        if cid not in safe:
+            skipped.append({"candidate_id": cid, "reason": "not (or no longer) an exact match; review it manually"})
+            continue
+        decide(session, cid, True)
+        confirmed.append(cid)
+    session.commit()
+    if confirmed:
+        try:
+            from app.services.classification import refresh_classification
+
+            refresh_classification(session)
+            session.commit()
+        except Exception:
+            session.rollback()
+    return {"confirmed": confirmed, "skipped": skipped, "remaining": _bulk_plan(session)}
+
+
 @router.post("/mappings/resolve")
 def mappings_resolve(session: Session = Depends(get_session)):
     return resolve_identifiers(session)
