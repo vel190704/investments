@@ -3,10 +3,9 @@
 Single-user, local-first portfolio analytics and planning tool for an Indian retail investor.
 It **never places orders**. Excel workbook = source of truth for transactions.
 
-Status: Phases 0–6 done (§10 = Phase 2, §11 = Phase 3, §12 = Phase 4, §13 = Phase 5: Excel-only
-workflow, hygiene, valuation framework, peers, qualitative notes, fund/portfolio AI cards, reliability;
-§14 = Phase 6: bug fixes, logging, live intraday prices).
-
+Status: Phases 0–5.1 done (§10 = Phase 2, §11 = Phase 3, §12 = Phase 4, §13 = Phase 5, §14 = Phase 5.1: fixes,
+logging, live prices). Phase 6 (§15: multi-user web app) in progress: 6a multi-user core → 6b deployment → 6c
+hardening, each a reviewed checkpoint.
 ---
 
 ## 1. Folder structure
@@ -964,7 +963,7 @@ manual override needs a source note and an as-of date.
 
 ---
 
-## 14. Phase 6 design: bug fixes, logging, live intraday prices
+## 14. Phase 5.1 design: bug fixes, logging, live intraday prices
 
 ### 14.1 Bug fixes (each has a test that failed before the fix)
 1. `POST /api/analysis/portfolio` → 422: `/analysis/{iid}` (registered first) captured "portfolio". All id path
@@ -1018,3 +1017,131 @@ every 15 s, viewer-idle skip, backoff, rate-limited manual refresh, view), table
 7. Backoff doubles the interval per consecutive failed cycle, capped at 10 minutes; one success resets it.
 8. Test connection is allowed while the privacy toggle is off, because it sends a fixed line with no data about
    the user; it is logged and counts toward the monthly cap.
+
+---
+
+## 15. Phase 6 design: invite-only multi-user web app (5-15 friends and family)
+
+Excel stays the only input; each user uploads their own workbook. The app still never places orders and never
+connects to a broker. Three checkpoints, each reviewed before the next: **6a multi-user core**, **6b deployment**,
+**6c hardening and operations**.
+
+### 15.1 Ownership model (6a)
+**Per-user** (column `user_id`, NOT NULL, FK `users.id`, indexed):
+
+| table | note |
+|---|---|
+| instruments | a user's workbook entries: name, symbol, confirmed ISIN / scheme code, overrides; unique (user_id, instrument_key) |
+| transactions, fallback_holdings, monthly_plan_items, identifier_candidates | the workbook and mapping confirmations |
+| import_runs, import_previews (new; replaces files under data/cache/import-preview) | uploads |
+| portfolio_snapshots (+ asset classes, holdings via cascade) | unique (user_id, snapshot_date) |
+| app_settings | primary key (user_id, key): targets, drift, concentration, projection, emergency fund, sector ranges, themes, health, rubric, sector rules, alerts, llm (per-user part), live (on/off) |
+| change_log, alerts, alert_state, thesis_entries, thesis_optin, qualitative_entries, peer_sets | personal records |
+| fund_disclosures (+ disclosure_holdings via cascade) | uploaded files belong to the uploader |
+| llm_analyses, llm_calls | analysis cache and usage per user (cache key includes the user) |
+| sector_assignments | origins EXCEL and MANUAL only (the NSE origin moves to securities) |
+| instrument_facts | origin MANUAL only (AUTO moves to security_facts) |
+| sector_sensitivities | primary key (user_id, sector) |
+| macro_values (MANUAL rows) | AUTO rows have user_id NULL (global); MANUAL rows are the user's |
+
+**Global market data** (no user_id): `securities` (new: one row per NSE symbol or AMFI scheme code, with ISIN,
+ETF underlying, AMFI category), `price_quotes` and `intraday_ticks` (re-keyed from instrument_id to security_id),
+`security_facts` (AUTO fundamentals, new), `security_sectors` (NSE sector lists, new), `annual_financials`,
+`peer_metrics`, `news_items` (by ISIN), `news_source_status`, `macro_values` (AUTO), `source_events`,
+`refresh_runs`, `snapshot_gaps` (the app was down for everyone), `platform_settings` (new: news feeds, market
+holidays, live poll interval, global AI cap, default model, token prices).
+
+**Accounts**: `users` (id, auth_subject = Supabase user uuid, email, role admin|user, ai_enabled,
+ai_monthly_cap, own_key_encrypted, created_at, last_active_at), `allowed_emails` (the invite list).
+
+A user instrument points to its security (`instruments.security_id`) once its identifier is known: stocks/ETFs
+by NSE symbol from the workbook, funds only after the user confirms an AMFI scheme code (proposals are still never
+applied silently). Prices, facts and sectors are read through that link.
+
+### 15.2 Enforcement (6a)
+- One request-scoped user context: the FastAPI dependency resolves the user from the JWT and opens a session
+  whose `info["user_id"]` is set. SQLAlchemy events on that session:
+  - `do_orm_execute` adds `Model.user_id == :uid` (with_loader_criteria) to every ORM SELECT, UPDATE and
+    DELETE that touches a per-user model, including `session.get(Model, id)` (a guessed id returns nothing);
+  - `before_flush` stamps `user_id` on new per-user rows and refuses a row whose user_id differs;
+  - with no user and no explicit system context, touching a per-user model raises (fail closed).
+- Jobs use `system_session()` (explicit, logged) and loop users where per-user work is needed.
+- Postgres Row Level Security (defence in depth): RLS enabled and forced on every per-user table, policy
+  `user_id = current_setting('app.user_id')::int` (or `app.system = 'on'` for jobs and migrations); the session
+  sets these with `SET LOCAL` at the start of each transaction. RLS is enabled with no policies on global tables
+  so Supabase's public Data API roles (anon/authenticated) can read nothing; the backend is the only reader.
+- Isolation tests: two users with near-identical data; for **every** route (iterated from the route table) user
+  A requests B's ids (and guessed ids) for read, update, delete and export, and must get 404/403 or only their
+  own rows; route coverage is asserted so a new route without an isolation case fails the suite.
+
+### 15.3 Auth (6a)
+- Supabase Auth, invite-only: open sign-up is disabled in Supabase, and the backend also checks the email
+  against `allowed_emails` (an admin may invite or remove). Login by email magic link with
+  `shouldCreateUser: false`.
+- The backend verifies the Supabase access token on every request: signature (JWKS, asymmetric keys; or the
+  legacy HS256 secret), `exp`, `aud = authenticated`, `iss = <project>/auth/v1`. Unknown or un-invited users
+  get 403.
+- Dev mode (`AUTH_MODE=dev`): a local fake user, plus `X-Dev-User: email` for tests. The app refuses to start
+  with `AUTH_MODE=dev` when `ENVIRONMENT=production`.
+- The first admin comes from `ADMIN_EMAILS`.
+
+### 15.4 Jobs (6a)
+Daily refresh, classification, fundamentals, news, macro and live polling run **once globally**, for the union of
+securities held by any user. Per-user work (snapshots, alerts) loops users using the shared prices. A Postgres
+advisory lock (`pg_try_advisory_lock`) per job name ensures two instances never run the same job; on SQLite a
+process lock.
+
+### 15.5 AI (6a)
+The platform `ANTHROPIC_API_KEY` stays server-side. AI is off for non-admin users until the admin enables it
+per user. There is a per-user monthly cap (default 10) and a global monthly cap, with usage per user on the
+admin page. Optionally a user may store their own key, encrypted with `FIELD_ENCRYPTION_KEY` (Fernet), never
+returned or logged; their calls then don't count toward the global cap.
+
+### 15.6 Admin, self-service, onboarding (6a)
+- Admin page (role admin): users (email, last active, row counts, AI usage), invite/remove, enable AI and set
+  the cap per user, delete a user's data completely.
+- Account page: Export my data (Excel, existing exporter, now per user); Delete my account and all data (typed
+  confirmation).
+- Onboarding: an empty dashboard with a downloadable Excel template (headers + a README sheet; no fake rows) and
+  three steps; every page renders an empty state with no data.
+
+### 15.7 Single-user assumptions found in the audit (all removed in 6a)
+1. `instruments.instrument_key` globally unique → unique per user.
+2. `app_settings` primary key `key` → (user_id, key); platform-wide sections move to `platform_settings`.
+3. `alert_state` keyed by a fixed `"alerts"` key → per user.
+4. `thesis_optin` and `peer_sets` keyed by instrument_id alone → rows carry user_id (instrument ids are per user).
+5. `sector_sensitivities` primary key `sector` → (user_id, sector).
+6. `portfolio_snapshots` unique on `snapshot_date` → (user_id, snapshot_date).
+7. `price_quotes`, `intraday_ticks`, AUTO `instrument_facts`, NSE `sector_assignments` keyed by a (now per-user)
+   instrument → keyed by global security.
+8. ETF underlying and AMFI category stored on instruments → on securities.
+9. Import previews written to `data/cache/import-preview/<sha>` (shared disk, no owner) → `import_previews` table
+   per user (also needed on hosts with an ephemeral disk).
+10. AI analysis cache keyed by input hash only → also by user; monthly cap counted over all calls → per user +
+    global.
+11. Live poller: `STATE.errors` by instrument and "holdings" of the single user → by security, polling the union
+    held by any user; the "someone is watching" signal is global.
+12. Start-up catch-up compared "the last snapshot" → the last snapshot of any user; gaps stay global.
+13. `ensure_first_snapshot` at start-up → per user, in the job.
+14. CLI tools (`make import`, `make refresh`) assumed the one user → `--user EMAIL` (import), refresh is global.
+15. `main.py` bound to 127.0.0.1 with no auth → auth on every route except `/api/health`.
+
+### 15.8 Data migration (6a)
+Alembic `0008_multi_user` upgrades an existing single-user DB in place: it creates the owner account
+(`LEGACY_OWNER_EMAIL`, default `owner@localhost`, role admin), assigns every existing row to it, builds
+`securities` from instruments and re-keys market data. `app/tools/sqlite_to_postgres.py` then copies a migrated
+SQLite file into an empty Postgres at head, mapping the owner to `--owner-email`, and prints portfolio totals
+from both databases (value, invested, P&L, transactions, snapshots), which must be identical.
+
+### 15.9 Checkpoints 6b and 6c
+Planned in their own sections when 6a is reviewed: Docker image and host, Vercel, CI and branch protection,
+separate preview database, docs/DEPLOY.md (6b); logging rules for user data, backups and restore test, Sentry,
+terms page, feedback form, uptime (6c).
+
+### 15.10 Assumptions (6a)
+1. Instruments are per user, not shared; two users holding LT have two instrument rows linked to one security.
+   This keeps workbook names, overrides and confirmations private and makes isolation simple.
+2. Manual macro values (repo rate, CPI) are per user; automated ones are global.
+3. Snapshot gaps are global (the server was down for everyone).
+4. Integer user ids internally (logged), mapped to the Supabase uuid; emails are not logged.
+5. Supabase's Data API is not used by the app; DEPLOY.md says to restrict it, and RLS denies its roles anyway.
