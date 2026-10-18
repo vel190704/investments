@@ -746,6 +746,24 @@ def put_sensitivity(sector: str, body: TagsIn, session: Session = Depends(get_se
     return {"ok": True}
 
 
+@router.get("/live")
+def live(session: Session = Depends(get_session)):
+    from app.services.live import live_view, mark_viewer
+
+    mark_viewer()  # the scheduler polls only while someone is looking
+    return live_view(session)
+
+
+@router.post("/live/refresh")
+def live_refresh(session: Session = Depends(get_session)):
+    """Explicit manual refresh: allowed outside market hours too (rate-limited)."""
+    from app.services.live import live_view, mark_viewer, poll_cycle
+
+    mark_viewer()
+    cycle = poll_cycle(session, manual=True)
+    return {"cycle": cycle, "view": live_view(session)}
+
+
 class LlmTestIn(BaseModel):
     model: str | None = None
 

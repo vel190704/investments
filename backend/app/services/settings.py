@@ -7,6 +7,7 @@ projection rates, which ship as clearly flagged placeholders (`reviewed: false`)
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy.orm import Session
@@ -52,6 +53,12 @@ DEFAULTS.update({
 from app.calc.framework import DEFAULT_RUBRIC, DEFAULT_SECTOR_RULES
 
 DEFAULTS.update({"rubric": dict(DEFAULT_RUBRIC), "sector_rules": {k: list(v) for k, v in DEFAULT_SECTOR_RULES.items()}})
+# Live intraday prices: off until the user turns it on (it makes a request every poll interval in market hours).
+# The holiday table starts empty: dates are entered by hand and verified against the NSE holiday list.
+DEFAULTS.update({"live": {"enabled": False, "poll_seconds": 60}, "market_holidays": {"holidays": []}})
+HOLIDAY_NOTE = ("Enter exchange holidays by hand and verify them against the NSE holiday list (nseindia.com › "
+                "Resources › Exchange Communication › Holidays). Nothing is scraped. Until a holiday is entered, that "
+                "weekday is treated as a trading day.")
 SECTIONS = tuple(DEFAULTS)
 FALLBACK_MODEL = "claude-opus-5-5"
 PRICING_NOTE = "Verify against the provider's pricing page; the app ships no prices."
@@ -63,6 +70,12 @@ HEALTH_LABELS = {
     "sector_hhi": ("Sector HHI", "hhi"),
     "overlap": ("Largest pairwise fund overlap", "fraction"),
 }
+# Live intraday prices: off until the user turns it on (it makes a request every poll interval in market hours).
+# The holiday table starts empty: dates are entered by hand and verified against the NSE holiday list.
+DEFAULTS.update({"live": {"enabled": False, "poll_seconds": 60}, "market_holidays": {"holidays": []}})
+HOLIDAY_NOTE = ("Enter exchange holidays by hand and verify them against the NSE holiday list (nseindia.com › "
+                "Resources › Exchange Communication › Holidays). Nothing is scraped. Until a holiday is entered, that "
+                "weekday is treated as a trading day.")
 SECTIONS = tuple(DEFAULTS)
 
 
@@ -230,6 +243,33 @@ def validate(section: str, value: dict) -> dict:
                 "concentration_change": bool(value.get("concentration_change", True)),
                 "disclosure_stale": bool(value.get("disclosure_stale", True)),
                 "review_due": bool(value.get("review_due", True))}
+
+    if section == "live":
+        from app.calc.market_hours import POLL_MAX, POLL_MIN
+
+        try:
+            poll = int(value.get("poll_seconds", 60))
+        except (TypeError, ValueError):
+            raise SettingsError("poll interval must be a whole number of seconds") from None
+        if not POLL_MIN <= poll <= POLL_MAX:
+            raise SettingsError(f"poll interval must be between {POLL_MIN} and {POLL_MAX} seconds")
+        return {"enabled": bool(value.get("enabled", False)), "poll_seconds": poll}
+
+    if section == "market_holidays":
+        rows, seen = [], set()
+        for h in value.get("holidays", []):
+            try:
+                d = date.fromisoformat(str(h.get("date", "")))
+            except ValueError:
+                raise SettingsError(f"holiday date {h.get('date')!r} is not YYYY-MM-DD") from None
+            name = str(h.get("name", "")).strip()
+            if not name:
+                raise SettingsError(f"holiday {d.isoformat()} needs a name")
+            if d in seen:
+                raise SettingsError(f"holiday {d.isoformat()} is listed twice")
+            seen.add(d)
+            rows.append({"date": d.isoformat(), "name": name[:80]})
+        return {"holidays": sorted(rows, key=lambda r: r["date"])}
 
     if section == "rubric":
         return {

@@ -54,6 +54,7 @@ def _job() -> None:
     from app.services.fundamentals import refresh_fundamentals
     from app.services.macro import refresh_macro
     from app.services.news import refresh_news
+    from app.services.live import prune as prune_ticks
     from app.services.snapshots import take_snapshot
     from app.timeutil import IST
 
@@ -66,8 +67,26 @@ def _job() -> None:
     run_job("news", _in_session(refresh_news))
     run_job("macro", _in_session(refresh_macro))
     run_job("alerts", _in_session(evaluate_alerts))
+    run_job("intraday_retention", _in_session(lambda s: {"summary": f"{prune_ticks(s)} old ticks removed"}))
     if sunday:
         run_job("weekly_ai", _in_session(weekly_job))
+
+
+LIVE_TICK_SECONDS = 15
+
+
+def _live_tick() -> None:
+    """Every 15 s: poll intraday quotes if live prices are on, the market is open, someone is watching and a poll
+    is due (interval/backoff). Quiet when nothing happens; each real poll logs one live_poll line."""
+    from app.services.live import scheduler_tick
+
+    try:
+        with session_scope() as s:
+            res = scheduler_tick(s)
+        if not res.get("ran"):
+            log.debug("live_tick skipped", extra={"fields": {"reason": res.get("reason")}})
+    except Exception:
+        event(log, "live_tick", logging.ERROR, exc_info=True, outcome="failed")
 
 
 def start_scheduler() -> BackgroundScheduler | None:
@@ -77,6 +96,10 @@ def start_scheduler() -> BackgroundScheduler | None:
     sched = BackgroundScheduler(timezone="Asia/Kolkata")
     sched.add_job(_job, CronTrigger(hour=st.refresh_hour, minute=st.refresh_minute, timezone="Asia/Kolkata"),
                   id="daily_refresh", replace_existing=True, misfire_grace_time=3600)
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    sched.add_job(_live_tick, IntervalTrigger(seconds=LIVE_TICK_SECONDS), id="live_prices", replace_existing=True,
+                  max_instances=1, coalesce=True)
     sched.start()
-    event(log, "scheduler_started", daily_at=f"{st.refresh_hour:02d}:{st.refresh_minute:02d} IST")
+    event(log, "scheduler_started", live_tick_s=LIVE_TICK_SECONDS, daily_at=f"{st.refresh_hour:02d}:{st.refresh_minute:02d} IST")
     return sched
