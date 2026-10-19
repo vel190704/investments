@@ -50,7 +50,23 @@ psql "<admin connection string from Supabase › Connect>" -v app_password='<new
      -f backend/deploy/app_role.sql
 ```
 
-- The app connects as `investments_app` (`DATABASE_URL=postgresql+psycopg://investments_app:<password>@<host>:5432/postgres`).
+- The app connects as `investments_app`. The exact `DATABASE_URL` format (session pooler; see the table below):
+  ```
+  postgresql+psycopg://investments_app.<project-ref>:<app role password, URL-encoded>@<session pooler host>:5432/postgres
+  ```
+  - **User** `investments_app.<project-ref>`: the pooler needs the project ref after a dot. Only the *direct*
+    connection (`db.<project-ref>.supabase.co`, often IPv6-only, which Render can't reach) takes the plain
+    `investments_app`.
+  - **Host**: Supabase › Connect › **Session pooler**, e.g. `aws-0-<region>.pooler.supabase.com`; **port 5432**
+    (6543 is the transaction pooler).
+  - **Scheme** `postgresql+psycopg://` (psycopg 3, the driver in the image). `postgresql://` and `postgres://`, as
+    Supabase shows them, are accepted and converted.
+  - **Password**: URL-encode `@ : / # ? %` (e.g. `@` → `%40`), or choose a password without them.
+- **The variable is named exactly `DATABASE_URL`.** If it is missing or empty, local development uses a SQLite file.
+  With any other `ENV` (production, preview, unset) the backend refuses to start: "DATABASE_URL is not set …". The
+  pre-deploy `alembic upgrade head` fails the same way. A non-Postgres or malformed value is refused too, without
+  printing it. The start-up log has one line, `database dialect=postgresql driver=psycopg host=<pooler host>`, and
+  `/api/health` returns `{"status":"ok","database":"postgresql"}`.
 - The release step (`alembic upgrade head`) runs as the same role, so it owns the tables. The per-user policies
   are FORCED, so they also apply to the owner.
 - The backend **refuses to start** (outside development/test) if its role is a superuser or has BYPASSRLS. A
@@ -163,7 +179,9 @@ Production service:
    - **Auto-Deploy**: **After CI Checks Pass** (so a red build never deploys);
    - do **not** enable scaling or add instances: run one instance. Jobs are guarded by advisory locks, but the
      rate limiter and the live-price viewer signal live in memory.
-6. **Create Web Service**. Watch the log for `database_role role=investments_app superuser=false bypassrls=false`.
+6. **Create Web Service**. Watch the log for `database dialect=postgresql driver=psycopg host=<pooler host>` and
+   `database_role role=investments_app superuser=false bypassrls=false`. Then
+   `https://<service>.onrender.com/api/health` must say `"database":"postgresql"`.
    If the role can bypass RLS, the service refuses to start; fix `DATABASE_URL` (§2).
 7. Never enable **Pull Request Previews** on this production service: Render copies its environment variables
    (production credentials) into each preview.
@@ -209,7 +227,7 @@ Backend (Render). The same names in both services, with each environment's own v
 | name | production | preview | notes |
 |---|---|---|---|
 | `ENV` | `production` | `preview` | unset or unknown counts as production |
-| `DATABASE_URL` | prod app-role URL | preview app-role URL | never the `postgres` role |
+| `DATABASE_URL` | prod app-role URL | preview app-role URL | **required**: session pooler, format in §2; never the `postgres` role; unset = refuses to start |
 | `SUPABASE_URL` | prod project | preview project | |
 | `SUPABASE_JWT_SECRET` | only if legacy | only if legacy | |
 | `SUPABASE_SERVICE_ROLE_KEY` | optional | optional | backend only; enables invite emails |
@@ -224,7 +242,7 @@ Backend (Render). The same names in both services, with each environment's own v
 | `SENTRY_DSN` | optional | optional (separate Sentry project) | error monitoring; events are scrubbed (below) |
 | `MAX_REQUEST_BYTES`, `RATE_LIMITS_ENABLED`, `SOURCE_TIMEOUT_SECONDS` | optional | optional | defaults are fine |
 
-Never set on Render: `DEV_AUTH`, `DEV_USER_EMAIL`, `BACKEND_URL`. Render sets `PORT` itself.
+Never set on Render: `DEV_AUTH`, `DEV_USER_EMAIL`, `BACKEND_URL`, `DATA_DIR`, `LOG_DIR` (the image sets the last two). Render sets `PORT` itself. Names are case-insensitive to the app, but use the upper-case names above: a typo such as `DATABASE_URI` is silently ignored and counts as unset.
 
 Frontend (Vercel), per scope:
 

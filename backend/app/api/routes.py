@@ -32,12 +32,14 @@ def health():
 
     from app.db import get_engine
 
+    engine = get_engine()
+    dialect = getattr(getattr(engine, "dialect", None), "name", "unknown")  # "postgresql" in production; never host
     try:
-        with get_engine().connect() as conn:
+        with engine.connect() as conn:
             conn.execute(sa_text("SELECT 1"))
     except Exception:
-        return JSONResponse({"status": "unavailable"}, status_code=503)
-    return {"status": "ok"}
+        return JSONResponse({"status": "unavailable", "database": dialect}, status_code=503)
+    return {"status": "ok", "database": dialect}
 
 
 # ---------------- import

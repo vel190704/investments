@@ -52,11 +52,23 @@ class Settings(BaseSettings):
 
     @property
     def resolved_database_url(self) -> str:
-        return self.database_url or f"sqlite:///{self.data_dir / 'investments.db'}"
+        """DATABASE_URL, normalised; empty or unset -> a SQLite file under DATA_DIR (local development only: outside
+        ENV=development|test the app and the migration step refuse anything but PostgreSQL, app/db.py)."""
+        return normalise_database_url(self.database_url) or f"sqlite:///{self.data_dir / 'investments.db'}"
 
     @property
     def cache_dir(self) -> Path:
         return self.data_dir / "cache"
+
+
+def normalise_database_url(url: str) -> str:
+    """Trim whitespace and stray quotes from a pasted value; the URL forms Supabase shows (postgres://,
+    postgresql://) get the driver the app ships with (psycopg 3): postgresql+psycopg://."""
+    url = (url or "").strip().strip("'\"").strip()
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url.removeprefix(prefix)
+    return url
 
 
 @lru_cache

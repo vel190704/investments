@@ -32,6 +32,8 @@ def supa(tmp_path, monkeypatch):
     # these tests are about tokens; the database-role guard has its own tests (test_postgres.py). Under
     # TEST_ALL_ON_POSTGRES the test role is a superuser, which that guard (correctly) refuses in production.
     monkeypatch.setattr(db, "check_rls_role", lambda: None)
+    # likewise the "production needs PostgreSQL" guard (test_database_config.py): these tests run on SQLite
+    monkeypatch.setattr(db, "check_database_config", lambda url=None: {"dialect": "sqlite", "driver": "-", "host": "-"})
     with TestClient(app_()) as c:
         yield c
 

@@ -45,6 +45,10 @@ def run_migrations_online() -> None:
     if connection is not None:
         _run(connection)
         return
+    from app.db import check_database_config
+
+    if not config.get_main_option("sqlalchemy.url"):
+        check_database_config(_url())  # `alembic upgrade head` (Render pre-deploy) refuses SQLite outside development/test
     cfg = config.get_section(config.config_ini_section, {})
     cfg["sqlalchemy.url"] = _url()
     engine = engine_from_config(cfg, prefix="sqlalchemy.", poolclass=pool.NullPool)

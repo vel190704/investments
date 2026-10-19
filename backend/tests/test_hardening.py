@@ -32,8 +32,9 @@ def test_hsts_outside_development(client, monkeypatch):
 
 
 def test_health_checks_the_database(client, monkeypatch):
-    assert client.get("/api/health").json() == {"status": "ok"}
     from app import db as dbm
+
+    assert client.get("/api/health").json() == {"status": "ok", "database": dbm.get_engine().dialect.name}
 
     class Broken:
         def connect(self):
@@ -41,7 +42,7 @@ def test_health_checks_the_database(client, monkeypatch):
 
     monkeypatch.setattr(dbm, "get_engine", lambda: Broken())
     r = client.get("/api/health")
-    assert r.status_code == 503 and r.json() == {"status": "unavailable"}
+    assert r.status_code == 503 and r.json()["status"] == "unavailable"
 
 
 def test_request_size_limit(client, monkeypatch):

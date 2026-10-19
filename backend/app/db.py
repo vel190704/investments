@@ -90,6 +90,48 @@ class UnsafeDatabaseRole(RuntimeError):
     pass
 
 
+class UnsafeDatabaseConfig(RuntimeError):
+    pass
+
+
+def database_summary(url=None) -> dict:
+    """Dialect, driver and host of a database URL (default: the configured engine's): never the user, password,
+    database name or URL."""
+    from sqlalchemy.engine import make_url
+
+    u = make_url(url) if url is not None else get_engine().url
+    return {"dialect": u.get_backend_name(), "driver": u.get_driver_name(), "host": u.host or "(local file)"}
+
+
+def check_database_config(url: str | None = None) -> dict:
+    """Outside ENV=development|test the database must be PostgreSQL: an unset DATABASE_URL would otherwise mean a
+    SQLite file inside the container, which is wiped on every deploy. Checks `url`, or else the engine actually in
+    use. Used by the app at start-up and by the migration step (migrations/env.py). Messages never contain the URL.
+    Returns database_summary()."""
+    from sqlalchemy.exc import ArgumentError
+
+    from app.auth import DEV_ENVS, effective_env
+
+    st = get_settings()
+    deployed = effective_env() not in DEV_ENVS
+    try:
+        info = database_summary(url)
+    except (ArgumentError, ValueError):
+        raise UnsafeDatabaseConfig("DATABASE_URL is not a valid database URL (its value is not shown). Expected "
+                                   "postgresql+psycopg://<user>:<password>@<host>:5432/postgres; a password with "
+                                   "@ : / # ? or % must be URL-encoded.") from None
+    if deployed and info["dialect"] != "postgresql":
+        if not st.database_url.strip():
+            raise UnsafeDatabaseConfig(
+                f"DATABASE_URL is not set (ENV is {st.env.strip() or 'unset'}, treated as {effective_env()}). "
+                "Refusing to start with a local SQLite file, which would lose all data on the next deploy. Set "
+                "DATABASE_URL to the Supabase session pooler URL: postgresql+psycopg://investments_app.<project-ref>:"
+                "<password>@<pooler host>:5432/postgres (docs/DEPLOY.md §2).")
+        raise UnsafeDatabaseConfig(f"DATABASE_URL uses {info['dialect']}; outside development/test only PostgreSQL "
+                                   "is allowed (postgresql+psycopg://...).")
+    return info
+
+
 def check_rls_role() -> dict | None:
     """Postgres: the app's role must not bypass Row Level Security (superuser or BYPASSRLS), or RLS is not an active
     second layer. Refuses outside development/test; returns the role's attributes (None on SQLite)."""
@@ -99,6 +141,8 @@ def check_rls_role() -> dict | None:
 
     engine = get_engine()
     if engine.dialect.name != "postgresql":
+        if effective_env() not in DEV_ENVS:  # belt and braces: check_database_config refuses this first
+            raise UnsafeDatabaseConfig(f"the database is {engine.dialect.name}, not PostgreSQL: refusing to start")
         return None
     with engine.connect() as conn:
         name, superuser, bypass = conn.execute(text(

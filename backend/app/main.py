@@ -59,8 +59,9 @@ async def lifespan(app: FastAPI):
     from app.jobs import first_snapshots, seed_all_sensitivities
 
     check_startup_config()  # refuses dev auth outside development/test
-    from app.db import check_rls_role
+    from app.db import check_database_config, check_rls_role
 
+    event(log, "database", **check_database_config())  # one line: dialect, driver, host; refuses SQLite when deployed
     role = check_rls_role()  # before any migration: refuses (outside dev/test) a Postgres role that bypasses RLS
     if role:
         event(log, "database_role", **role)
