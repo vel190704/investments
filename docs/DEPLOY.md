@@ -201,6 +201,14 @@ Preview service:
 4. **Deploy**. Then **Settings › Git**: Production Branch `main`.
 5. Copy the production URL into the production backend's `CORS_ORIGINS` and Supabase's Site URL. Point preview
    URLs at the preview backend (`CORS_ORIGIN_REGEX`) and the preview Supabase redirect URLs.
+6. **`NEXT_PUBLIC_*` values are fixed at build time.** Adding or changing one takes effect only after a **new**
+   deployment (Deployments › … › **Redeploy**, without "use existing build cache" if offered). The build checks the
+   scope it is building:
+   - `next build` **fails** when `NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` is missing or empty.
+     The error names the variable and the Vercel environment (`production`/`preview`), never a value. A Preview
+     deployment (any branch other than the Production Branch, incl. `main` when Production Branch is `production`,
+     §17) needs them in the **Preview** scope too.
+   - `/login` on an older build names the missing variable and the deployment type.
 
 ## 8. GitHub: CI and branch protection
 

@@ -6,16 +6,21 @@
 
 import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
+import { missingSupabaseVars, notConfiguredMessage } from "./buildenv";
 import { previewProblem } from "./envguard";
 
-// Static references: Next.js inlines NEXT_PUBLIC_* values at build time.
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+// Static references: Next.js inlines NEXT_PUBLIC_* values at build time, only when written out literally like this
+// (never process.env[name] or destructuring). `next build` refuses to run without these two (next.config.ts).
+const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
+const SUPABASE_ANON_KEY = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
+// Vercel's environment (production | preview | development), injected by next.config.ts from VERCEL_ENV at build
+// time, so it doesn't depend on the "Automatically expose System Environment Variables" project setting.
+const DEPLOYMENT_ENV = process.env.NEXT_PUBLIC_VERCEL_ENV || process.env.BUILD_VERCEL_ENV || undefined;
 // Fail closed: sign-in is required unless NEXT_PUBLIC_DEV_AUTH is exactly "1" (local `make dev` sets it).
 export const AUTH_MODE: "dev" | "supabase" = process.env.NEXT_PUBLIC_DEV_AUTH === "1" ? "dev" : "supabase";
 export const PUBLIC_PATHS = ["/login", "/auth/callback", "/terms", "/help"];
 /** Set in a Vercel preview that points at a Supabase project not on its allow-list: sign-in is then disabled. */
-export const PREVIEW_PROBLEM = previewProblem(process.env.NEXT_PUBLIC_VERCEL_ENV, SUPABASE_URL,
+export const PREVIEW_PROBLEM = previewProblem(DEPLOYMENT_ENV, SUPABASE_URL,
                                               process.env.NEXT_PUBLIC_PREVIEW_SUPABASE_REFS);
 
 let client: SupabaseClient | null = null;
@@ -41,7 +46,10 @@ export async function accessToken(): Promise<string | null> {
 export async function sendMagicLink(email: string): Promise<string | null> {
   if (PREVIEW_PROBLEM) return PREVIEW_PROBLEM;
   const sb = supabase();
-  if (!sb) return "Sign-in is not configured (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY).";
+  if (!sb) {
+    const missing = missingSupabaseVars({ url: SUPABASE_URL, anonKey: SUPABASE_ANON_KEY });
+    return missing.length ? notConfiguredMessage(missing, DEPLOYMENT_ENV) : "Sign-in is not available in this build.";
+  }
   const { error } = await sb.auth.signInWithOtp({
     email: email.trim(),
     options: { shouldCreateUser: false, emailRedirectTo: `${window.location.origin}/auth/callback` },

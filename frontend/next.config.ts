@@ -1,4 +1,6 @@
 import type { NextConfig } from "next";
+import { PHASE_PRODUCTION_BUILD } from "next/constants";
+import { buildEnvProblem } from "./src/lib/buildenv";
 
 // Local dev: the browser calls /api on this server and it is proxied to BACKEND_URL (default 127.0.0.1:8000).
 // Deployed (Vercel): NEXT_PUBLIC_API_URL is set and the browser calls the backend directly (CORS-restricted there);
@@ -22,6 +24,11 @@ const csp = [
 ].join("; ");
 
 const nextConfig: NextConfig = {
+  env: {
+    // Vercel sets VERCEL_ENV during every build; exposing it this way makes the preview guard (src/lib/envguard.ts)
+    // independent of the "Automatically expose System Environment Variables" setting. Not a secret.
+    BUILD_VERCEL_ENV: process.env.VERCEL_ENV ?? "",
+  },
   async rewrites() {
     return backend ? [{ source: "/api/:path*", destination: `${backend}/api/:path*` }] : [];
   },
@@ -43,4 +50,11 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default function config(phase: string): NextConfig {
+  // `next typegen` (make check) loads the config in the same phase: only the real `next build` is checked
+  if (phase === PHASE_PRODUCTION_BUILD && process.argv.slice(2).includes("build")) {
+    const problem = buildEnvProblem(process.env);  // names only, never values
+    if (problem) throw new Error(problem);
+  }
+  return nextConfig;
+}
