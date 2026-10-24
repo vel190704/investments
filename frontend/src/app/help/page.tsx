@@ -20,9 +20,10 @@ export default function HelpPage() {
         </Section>
 
         <Section title="1. Sign in">
-          <p>Open the app and enter the email you were invited with. You get a one-time sign-in link by email; there
-            is no password. Open the link on the same device. If no email arrives, check spam, then ask the person who
-            invited you.</p>
+          <p>Open the app and enter the email you were invited with. You get an email with a sign-in link and a
+            6-digit code; there is no password. Either open the link <b>in the same browser</b> where you asked for it,
+            or type the code on the sign-in page (this works from any browser or device, e.g. when you read the email
+            on your phone). If no email arrives, check spam, then ask the person who invited you.</p>
         </Section>
 
         <Section title="2. Put your investments in the Excel template">

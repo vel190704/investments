@@ -105,9 +105,32 @@ limits in Supabase's docs before relying on it. For friends and family, set up y
    port, username, password (the SMTP password lives only here), sender address and sender name.
 3. Supabase › **Authentication › Rate limits**: set the email rate to suit 5–15 people (sign-ins are infrequent).
    Keep it low enough that a misbehaving client can't send hundreds of emails.
-4. Supabase › **Authentication › Emails › Templates**: optionally adjust the "Magic link" and "Invite user" texts.
-   Keep the link token placeholder as it is.
-5. Test: invite yourself on a second address, then sign in from a private browser window.
+4. Supabase › **Authentication › Emails › Templates › Magic link** (by hand, in **both** projects): show the
+   one-time code beside the link. The link only works in the browser where it was requested (PKCE: that browser
+   holds the verifier). The code works in any browser or device: /login › "Sign in with the code".
+   Keep `{{ .ConfirmationURL }}` exactly as it is. Suggested template:
+   - Subject: `Your sign-in link and code`
+   - Body:
+     ```html
+     <h2>Sign in to Portfolio Analytics</h2>
+     <p><a href="{{ .ConfirmationURL }}">Sign in</a>. Open this link in the same browser where you asked for it.</p>
+     <p>On another browser or device, enter this code on the sign-in page instead:</p>
+     <p style="font-size:24px;letter-spacing:4px"><b>{{ .Token }}</b></p>
+     <p>The link and the code work once and expire soon. If you didn't ask to sign in, ignore this email.</p>
+     ```
+   - Optionally adjust "Invite user" too. Invited people then sign in on /login, which sends this Magic link email.
+5. Review, in both projects (⚠ names and defaults as at the time of writing; check the dashboard):
+   - **Authentication › Providers › Email › Email OTP Expiration**: how long the link and code stay valid. The
+     default is 1 hour; 10–15 minutes is plenty for a code someone types at once.
+   - **Email OTP Length**: 6 digits is what the page asks for. It accepts 6–10, but the help text says 6.
+   - **Authentication › Rate Limits**:
+     - emails sent per hour (project-wide; very low with the built-in sender, set it with custom SMTP);
+     - token verifications per IP (guesses at codes);
+     - the minimum interval before the same address can ask again (about 60 s by default).
+     Keep them low: 5–15 people sign in rarely.
+6. Test: invite yourself on a second address. Then:
+   - ask for a sign-in in a private window and open the link there: you land on the dashboard;
+   - ask again, open the email on your phone and type the code on the computer: you are signed in too.
 
 The preview project can keep Supabase's built-in sender; only you and test accounts sign in there.
 
